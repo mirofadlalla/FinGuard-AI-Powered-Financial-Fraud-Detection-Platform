@@ -1,0 +1,6 @@
+numpy
+pandas
+scikit-learn
+xgboost
+# PyTorch with GPU (NVIDIA): pip install torch --index-url https://download.pytorch.org/whl/cu121
+torch
