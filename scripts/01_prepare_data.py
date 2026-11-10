@@ -12,7 +12,6 @@ from finguard.ieee import prepare
 
 data_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "data"
 print("Reading files from:", data_dir)
-
 d = prepare(data_dir)
 
 total = sum(len(d[f"y_{s}"]) for s in ["train", "val", "test"])

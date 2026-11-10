@@ -29,7 +29,7 @@ X_tr, y_tr = d["X_train"], d["y_train"].astype("float32")
 X_va, y_va, amt_va = d["X_val"], d["y_val"].astype("float32"), d["amount_val"]
 X_te, y_te, amt_te = d["X_test"], d["y_test"].astype("float32"), d["amount_test"]
 
-pos_weight = float((y_tr == 0).sum() / (y_tr == 1).sum())
+pos_weight = float((y_tr == 0).sum() / (y_tr == 1).sum()) # for example 100:1 legit:fraud, used in weighted BCE loss
 # the neural net cannot handle NaN: replace by 0 (= the mean after scaling)
 X_tr, X_va, X_te = [np.nan_to_num(x, nan=0.0) for x in (X_tr, X_va, X_te)]
 n_features = X_tr.shape[1]

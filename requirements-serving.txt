@@ -1,0 +1,8 @@
+numpy
+xgboost
+fastapi
+uvicorn
+httpx
+sqlalchemy
+redis
+psycopg2-binary

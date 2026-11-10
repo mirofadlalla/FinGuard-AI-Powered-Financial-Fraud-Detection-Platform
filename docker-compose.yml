@@ -1,0 +1,46 @@
+# Start everything:  docker compose up --build
+# API docs:          http://localhost:8000/docs      MLflow UI: http://localhost:5000
+services:
+  api:
+    build: .
+    ports: ["8000:8000"]
+    environment:
+      DATABASE_URL: postgresql+psycopg2://finguard:finguard@postgres:5432/finguard
+      REDIS_URL: redis://redis:6379/0
+      MODEL_DIR: /models/model
+      FEATURE_FILE: /data/ieee_ready.npz
+      GROQ_API_KEY: ${GROQ_API_KEY:-}               # optional: the assistant works without it
+    volumes:
+      - ./artifacts/model:/models/model:ro           # the production model (made by 05_train_final.py)
+      - ./data:/data:ro
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: finguard
+      POSTGRES_PASSWORD: finguard
+      POSTGRES_DB: finguard
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U finguard"]
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 10
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:latest
+    command: mlflow server --host 0.0.0.0 --port 5000 --backend-store-uri sqlite:////mlflow/mlflow.db --default-artifact-root /mlflow/artifacts
+    ports: ["5000:5000"]
+    volumes: [./mlflow_server:/mlflow]
+
+volumes:
+  pgdata:

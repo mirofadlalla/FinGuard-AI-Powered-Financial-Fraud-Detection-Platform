@@ -45,16 +45,11 @@ def no_model_cost(y, amount):
 
 def report(y, p, amount, thr, name="", fp_cost=FP_COST):
     flagged = p >= thr
-
-    # بيحسب الكونفقيوشن ماتركس 
     tp = int(((y == 1) & flagged).sum())
     fp = int(((y == 0) & flagged).sum())
     fn = int(((y == 1) & ~flagged).sum())
-
-    # يحسب منهم 
     precision = tp / max(tp + fp, 1)
     recall = tp / max(tp + fn, 1)
-    
     cost = float(amount[(y == 1) & ~flagged].sum() + fp_cost * fp)
     return {"model": name,
             "PR-AUC": round(average_precision_score(y, p), 4),

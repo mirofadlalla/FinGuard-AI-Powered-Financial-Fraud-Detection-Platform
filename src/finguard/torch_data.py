@@ -12,6 +12,7 @@ class FastLoader:
         self.shuffle = shuffle
         self.fraud_weight = fraud_weight
         self.dataset = self.y        # the trainer only needs len(loader.dataset)
+        self.is_training = shuffle or fraud_weight is not None
 
     def __len__(self):
         return (len(self.y) + self.batch_size - 1) // self.batch_size
@@ -30,7 +31,7 @@ class FastLoader:
 
         for i in range(0, n, self.batch_size):
             batch = idx[i:i + self.batch_size]
-            if len(batch) < 2:        # BatchNorm cannot train on a single row
+            if self.is_training and len(batch) < 2:     # BatchNorm cannot train on a single row
                 continue
             yield self.X[batch], self.y[batch]
 

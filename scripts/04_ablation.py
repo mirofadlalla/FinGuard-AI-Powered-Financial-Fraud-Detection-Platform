@@ -6,11 +6,13 @@ Differences smaller than ~0.003 PR-AUC are just noise (one seed).
 """
 import re
 import sys
+import warnings
 from pathlib import Path
 import numpy as np
 import pandas as pd
 from xgboost import XGBClassifier
 
+warnings.filterwarnings("ignore", message=".*mismatched devices.*")
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 from finguard.metrics import report, precision_threshold
@@ -19,7 +21,9 @@ data_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "data"
 (ROOT / "artifacts").mkdir(exist_ok=True)
 
 d = np.load(data_dir / "ieee_ready.npz", allow_pickle=True)
+
 names = list(d["feature_names"])
+
 X_tr, y_tr = d["X_train"], d["y_train"]
 X_va, y_va = d["X_val"], d["y_val"]
 X_te, y_te, amt_te = d["X_test"], d["y_test"], d["amount_test"]
@@ -58,7 +62,7 @@ def pick_device():
         return "cpu"
 
 
-device = "cuda"
+device = pick_device()
 ratio = (y_tr == 0).sum() / (y_tr == 1).sum()
 
 

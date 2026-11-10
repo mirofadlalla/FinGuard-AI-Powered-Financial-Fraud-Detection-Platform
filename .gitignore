@@ -1,2 +1,74 @@
-.data
-.artifacts
+# ── Data ────────────────────────────────────────────────────────────────────
+data/*
+!data/.gitkeep
+
+# ── Artifacts (models, checkpoints, reports) ────────────────────────────────
+artifacts/*
+!artifacts/.gitkeep
+# Explicitly block binary/large file types in case wildcards are over-ridden
+*.ubj
+*.pt
+*.onnx
+*.pkl
+*.pickle
+*.joblib
+*.h5
+*.hdf5
+*.npy
+*.npz
+
+# ── MLflow ──────────────────────────────────────────────────────────────────
+mlruns/
+mlartifacts/
+mlflow.db
+mlflow_server/
+
+# ── Database / cache ────────────────────────────────────────────────────────
+finguard.db
+*.db
+*.sqlite
+*.sqlite3
+
+# ── Python ──────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# ── Jupyter ─────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ── Environment / secrets ────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── OS / editors ─────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+*.code-workspace
+
+# ── Docker volumes ───────────────────────────────────────────────────────────
+pgdata/
+
+# ── Test / coverage ──────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml

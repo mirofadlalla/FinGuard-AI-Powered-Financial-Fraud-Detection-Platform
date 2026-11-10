@@ -5,7 +5,6 @@ class FocalLoss(nn.Module):
     """Binary focal loss on logits (Lin et al. 2017): down-weights easy negatives."""
     def __init__(self, alpha=0.75, gamma=2.0):
         super().__init__(); self.alpha, self.gamma = alpha, gamma
-        
     def forward(self, logits, y):
         bce = F.binary_cross_entropy_with_logits(logits, y, reduction="none")
         pt = torch.exp(-bce)

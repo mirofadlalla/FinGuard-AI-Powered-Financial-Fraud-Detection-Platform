@@ -32,7 +32,7 @@ UID_STD = ["TransactionAmt", "Dn_D15", "Dn_D4"]
 CARD_MEAN = ["M4", "M1", "M7"]
 CARD_STD = ["M8"]
 
-# retruns the means and the stds of target cols
+
 def agg_names(prefix, mean_cols, std_cols):
     return ([f"{prefix}_agg_{c}_mean" for c in mean_cols] + [f"{prefix}_agg_{c}_std" for c in std_cols])
 
@@ -45,7 +45,6 @@ COMBOS = {"c1_a1_pe": ["card1", "addr1", "P_emaildomain"],
           "c3_a1_pe": ["card3", "addr1", "P_emaildomain"],
           "c4_a1_pe": ["card4", "addr1", "P_emaildomain"],
           "c4_a1_re": ["card4", "addr1", "R_emaildomain"]}
-
 COMBO_WINDOWS = {"1d": 86400, "7d": 7 * 86400}
 COMBO_COLS = [f"combo_{n}_count_{w}" for n in COMBOS for w in COMBO_WINDOWS]
 
@@ -56,8 +55,8 @@ FREQ_COLS = (["ProductCD"] + CARD_COLS + ["addr1", "addr2", "P_emaildomain", "R_
 
 # numeric columns with a long tail -> we squash them with a log
 BASE_LOG_COLS = (["TransactionAmt", "dist1",
-                  "card_count_before", "card_amt_vs_mean", "card_secs_since_last",
-                  "uid_count_before", "uid_amt_vs_mean", "uid_secs_since_last",
+                  "card_amt_vs_mean", "card_secs_since_last",
+                  "uid_amt_vs_mean", "uid_secs_since_last",
                   "uid_count_1h", "uid_count_1d", "uid_count_7d", "card1_count_1d"]
                  + COMBO_COLS + AGG_COLS + C_COLS + D_COLS)
 # numeric columns we keep as they are (they only get scaled later)
@@ -94,11 +93,11 @@ def load_raw(data_dir):
 #  feature engineering (past only) 
 def add_history(df, key, prefix):
     """Past behaviour of each group (ex: each card). Only uses rows BEFORE the current one."""
-    codes = pd.factorize(df[key])[0]                      # one integer per group بندي لك كود يونيك رقم 
+    codes = pd.factorize(df[key])[0]                      # one integer per group
     amount = df["TransactionAmt"].astype("float64")
 
     count_before = df.groupby(codes).cumcount()           # how many transactions before this one
-    past_sum = amount.groupby(codes).cumsum() - amount    # sum of past amounts لان مش عازين الاماونت الحاليه عاوزين بس الماضي
+    past_sum = amount.groupby(codes).cumsum() - amount    # sum of past amounts
     past_mean = past_sum / count_before.replace(0, np.nan)
 
     df[f"{prefix}_count_before"] = count_before
@@ -114,8 +113,8 @@ def add_past_aggs(df, key, prefix, mean_cols, std_cols):
     Running sums trick: mean = sum / n, std = sqrt(sum of squares / n - mean^2).
     We subtract the current row so it never sees itself.
     """
-    codes = pd.factorize(df[key])[0]
-    for col in sorted(set(mean_cols) | set(std_cols)):
+    codes = pd.factorize(df[key])[0] # one integer per group
+    for col in sorted(set(mean_cols) | set(std_cols)): # we used sorted() so the columns are always in the same order (for tests)
         x = df[col].astype("float64")
         has_value = x.notna().astype("float64")
         x0 = x.fillna(0.0)
@@ -131,10 +130,12 @@ def add_past_aggs(df, key, prefix, mean_cols, std_cols):
 
 
 def rolling_count(codes, t, seconds):
-    """For each row: how many rows of the SAME group happened in the last `seconds` (not counting itself).
+    """For each row: how many rows of the SAME group happened in the last seconds (not counting itself).
 
     Trick: sort by (group, time), then glue group and time into one number
     so one searchsorted call works for all groups at once.
+    الفكره هي رولينج ويندو على كل مجموعة على حدة، ونحسب عدد الصفوف التي حدثت في نافذة زمنية محددة قبل كل صف.
+    علشان نعرف عدد الترانكشن اللي حصلت قبل كل صف، بنرتب البيانات حسب المجموعة والوقت، وبعدين نستخدم البحث الثنائي (searchsorted) على الأرقام المدمجة (المجموعة + الوقت) عشان نلاقي أول صف في النافذة الزمنية لكل صف.
     """
     BIG = 10 ** 9                                         # bigger than any time value
     order = np.lexsort((t, codes))
@@ -152,39 +153,39 @@ def add_rolling(df, key, prefix, windows):
     for name, seconds in windows.items():
         df[f"{prefix}_count_{name}"] = rolling_count(codes, t, seconds)
 
-
+# feature engineering: add new columns to the dataframe. Rows must be in time order.
 def add_features(df):
     """Create the new columns. Rows must be in time order."""
     df = df.sort_values("TransactionDT").reset_index(drop=True)
     day = df["TransactionDT"] // 86400            # TransactionDT = seconds from some start date
 
-    # --- time (hour as a circle: 23h and 0h are close) ---
+    #  time (hour as a circle: 23h and 0h are close) 
     hour = (df["TransactionDT"] / 3600) % 24
     df["hour_sin"] = np.sin(2 * np.pi * hour / 24)
     df["hour_cos"] = np.cos(2 * np.pi * hour / 24)
     df["dow"] = day % 7
 
-    # --- amount and simple flags ---
+    #  amount and simple flags 
     df["amt_decimal"] = df["TransactionAmt"] % 1          # ex: 59.00 vs 59.37
     df["email_same"] = (df["P_emaildomain"] == df["R_emaildomain"]).astype("float32")
     mapping = {"T": 1.0, "F": 0.0, "M0": 0.0, "M1": 1.0, "M2": 2.0}
     for col in M_COLS:
         df[col] = df[col].map(mapping).astype("float32")
 
-    # --- normalized D columns: (D - today) is almost the same number for every transaction of a client ---
+    #  normalized D columns: (D - today) is almost the same number for every transaction of a client 
     day_float = df["TransactionDT"] / 86400
     for name in DN_COLS:
         d = name.replace("Dn_", "")
         df[name] = (df[d] - day_float).astype("float32")
 
-    # --- how many values are missing in each row (missing itself is a signal) ---
+    #  how many values are missing in each row (missing itself is a signal) 
     v_present = [c for c in V_COLS if c in df.columns]
     id_present = [c for c in ID_NUM_COLS + ID_CAT_COLS + ["DeviceType", "DeviceInfo"] if c in df.columns]
     df["na_count_D"] = df[D_COLS].isna().sum(axis=1)
     df["na_count_V"] = df[v_present].isna().sum(axis=1)
     df["na_count_id"] = df[id_present].isna().sum(axis=1)
 
-    # --- "client id" ---
+    #  "client id" 
     # card + address = probably the same person
     df["card_key"] = df["card1"].astype(str) + "_" + df["addr1"].astype(str)
     # D1 = days since the card's first transaction, so (day - D1) = the day the card started.
@@ -192,17 +193,17 @@ def add_features(df):
     start_day = (day - df["D1"]).round()
     df["uid"] = df["card_key"] + "_" + start_day.astype(str)
 
-    # --- behaviour history of the client (all use the past only) ---
+    #  behaviour history of the client (all use the past only) 
     add_history(df, "card_key", "card")
     add_history(df, "uid", "uid")
     add_rolling(df, "uid", "uid", {"1h": 3600, "1d": 86400, "7d": 7 * 86400})
     add_rolling(df, "card1", "card1", {"1d": 86400})
 
-    # --- aggregates over the client (past rows only) ---
+    #  aggregates over the client (past rows only) 
     add_past_aggs(df, "uid", "uid", UID_MEAN, UID_STD)
     add_past_aggs(df, "card_key", "card", CARD_MEAN, CARD_STD)
 
-    # --- combinations: how busy was this card+address+email in the last day / week ---
+    #  combinations: how busy was this card+address+email in the last day / week 
     for name, cols in COMBOS.items():
         key = df[cols[0]].astype(str)
         for c in cols[1:]:
@@ -325,6 +326,7 @@ def prepare(data_dir, train_frac=0.70, val_frac=0.15):
     out = {"feature_names": np.array(prep.feature_names)}
     for name, part in parts.items():
         out[f"X_{name}"] = prep.transform(part).values
+        out[f"id_{name}"] = part["TransactionID"].values.astype("int64")    # needed later by the API
         out[f"y_{name}"] = part["isFraud"].values.astype("int8")
         out[f"amount_{name}"] = part["TransactionAmt"].values.astype("float32")   # for the cost metric
     return out

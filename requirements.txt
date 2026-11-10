@@ -2,5 +2,14 @@ numpy
 pandas
 scikit-learn
 xgboost
+mlflow
+matplotlib
+fastapi
+uvicorn
+httpx
+sqlalchemy
+redis
+psycopg2-binary
+groq
 # PyTorch with GPU (NVIDIA): pip install torch --index-url https://download.pytorch.org/whl/cu121
 torch
