@@ -138,6 +138,15 @@ def rolling_count(codes, t, seconds):
     علشان نعرف عدد الترانكشن اللي حصلت قبل كل صف، بنرتب البيانات حسب المجموعة والوقت، وبعدين نستخدم البحث الثنائي (searchsorted) على الأرقام المدمجة (المجموعة + الوقت) عشان نلاقي أول صف في النافذة الزمنية لكل صف.
     """
     BIG = 10 ** 9                                         # bigger than any time value
+    # Safety check: the glued value must fit in int64 (2^63 - 1 ≈ 9.2e18)
+    max_code = int(codes.max()) if len(codes) else 0
+    max_t = int(t.max()) if len(t) else 0
+    if max_code * BIG + max_t > 9_200_000_000_000_000_000:
+        raise OverflowError(
+            f"rolling_count: glued key overflows int64 "
+            f"(max_code={max_code}, max_t={max_t}, BIG={BIG}). "
+            "Reduce BIG or re-encode group codes."
+        )
     order = np.lexsort((t, codes))
     glued = codes[order].astype("int64") * BIG + t[order]
     first_in_window = np.searchsorted(glued, glued - seconds, side="left")

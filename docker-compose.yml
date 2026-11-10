@@ -16,6 +16,10 @@ services:
     depends_on:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
+    deploy:
+      resources:
+        limits:
+          memory: 1g
 
   postgres:
     image: postgres:16
@@ -37,10 +41,14 @@ services:
       retries: 10
 
   mlflow:
-    image: ghcr.io/mlflow/mlflow:latest
+    image: ghcr.io/mlflow/mlflow:v2.14.1
     command: mlflow server --host 0.0.0.0 --port 5000 --backend-store-uri sqlite:////mlflow/mlflow.db --default-artifact-root /mlflow/artifacts
     ports: ["5000:5000"]
     volumes: [./mlflow_server:/mlflow]
+    deploy:
+      resources:
+        limits:
+          memory: 512m
 
 volumes:
   pgdata:

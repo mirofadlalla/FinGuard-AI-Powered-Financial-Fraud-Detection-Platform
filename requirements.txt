@@ -6,7 +6,6 @@ mlflow
 matplotlib
 fastapi
 uvicorn
-httpx
 sqlalchemy
 redis
 psycopg2-binary

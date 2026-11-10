@@ -110,7 +110,22 @@ def investigate(body: Question):
 
 @app.get("/monitoring/summary")
 def monitoring():
-    """Quick health of the model in production: how many decisions of each type, mean score vs training."""
+    """Quick health of the model in production: how many decisions of each type, mean score vs training.
+
+    Result is cached in Redis for 60 s to avoid a table scan on every call.
+    """
+    cache = state["cache"]
+    cached = cache.get("monitoring:summary")
+    if cached:
+        return {**cached, "from_cache": True}
     stats = recent_stats(state["db"])
     stats["training_mean_prob_on_validation"] = state["model"].meta.get("val_mean_prob")
-    return stats
+    cache.client and cache.set("monitoring:summary", stats)   # TTL inherits cache.ttl (1 h), fine for monitoring
+    # Override with a short TTL so staleness is bounded to 60 s
+    try:
+        if cache.client:
+            import json
+            cache.client.setex("monitoring:summary", 60, json.dumps(stats))
+    except Exception:
+        pass
+    return {**stats, "from_cache": False}
