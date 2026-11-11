@@ -1,0 +1,11 @@
+# Minimal dependencies to run the test suite in CI.
+# Heavy ML packages (torch, xgboost) are optional — tests that need them are
+# automatically skipped when the packages are absent (pytest.importorskip).
+numpy
+pandas
+scikit-learn
+sqlalchemy
+pytest
+prometheus-client
+# Uncomment to also run the model-architecture tests (requires ~2 GB):
+# torch --index-url https://download.pytorch.org/whl/cpu

@@ -23,7 +23,13 @@ from finguard.metrics import (
     summarize,
 )
 from finguard.db import Cache, make_engine, save_decision, get_decision, recent_stats, save_feedback, quality_stats
-from finguard.models import FraudMLP, ResBlock
+
+# Skip marker for torch-dependent tests (model architecture).
+# torch itself is NOT imported here — only inside tests that need it.
+_no_torch = pytest.mark.skipif(
+    not __import__("importlib").util.find_spec("torch"),
+    reason="torch not installed",
+)
 
 
 # ─────────────────────────── data-leakage tests ────────────────────────────
@@ -215,25 +221,34 @@ def test_cache_disabled_when_no_redis():
 
 
 # ─────────────────────────── model architecture tests ───────────────────────
+# These tests require torch; they are automatically skipped when torch is absent
+# (pytest.importorskip at module level already handles this, but local imports
+# keep the test self-contained for readability).
 
+@_no_torch
 def test_res_block_output_shape():
     import torch
+    from finguard.models import ResBlock
     block = ResBlock(dim=64, dropout=0.0)
     x = torch.randn(8, 64)
     out = block(x)
     assert out.shape == (8, 64)
 
 
+@_no_torch
 def test_fraud_mlp_output_shape():
     import torch
+    from finguard.models import FraudMLP
     mlp = FraudMLP(n_features=50, hidden=64, n_blocks=2, dropout=0.0)
     x = torch.randn(16, 50)
     out = mlp(x)
     assert out.shape == (16,)   # one logit per row
 
 
+@_no_torch
 def test_fraud_mlp_zero_blocks_is_plain_mlp():
     import torch
+    from finguard.models import FraudMLP
     mlp = FraudMLP(n_features=20, hidden=32, n_blocks=0, dropout=0.0)
     x = torch.randn(4, 20)
     out = mlp(x)
