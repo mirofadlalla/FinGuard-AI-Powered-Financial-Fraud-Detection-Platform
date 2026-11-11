@@ -113,8 +113,8 @@ def add_past_aggs(df, key, prefix, mean_cols, std_cols):
     Running sums trick: mean = sum / n, std = sqrt(sum of squares / n - mean^2).
     We subtract the current row so it never sees itself.
     """
-    codes = pd.factorize(df[key])[0] # one integer per group
-    for col in sorted(set(mean_cols) | set(std_cols)): # we used sorted() so the columns are always in the same order (for tests)
+    codes = pd.factorize(df[key])[0]
+    for col in sorted(set(mean_cols) | set(std_cols)):
         x = df[col].astype("float64")
         has_value = x.notna().astype("float64")
         x0 = x.fillna(0.0)
@@ -130,23 +130,12 @@ def add_past_aggs(df, key, prefix, mean_cols, std_cols):
 
 
 def rolling_count(codes, t, seconds):
-    """For each row: how many rows of the SAME group happened in the last seconds (not counting itself).
+    """For each row: how many rows of the SAME group happened in the last `seconds` (not counting itself).
 
     Trick: sort by (group, time), then glue group and time into one number
     so one searchsorted call works for all groups at once.
-    الفكره هي رولينج ويندو على كل مجموعة على حدة، ونحسب عدد الصفوف التي حدثت في نافذة زمنية محددة قبل كل صف.
-    علشان نعرف عدد الترانكشن اللي حصلت قبل كل صف، بنرتب البيانات حسب المجموعة والوقت، وبعدين نستخدم البحث الثنائي (searchsorted) على الأرقام المدمجة (المجموعة + الوقت) عشان نلاقي أول صف في النافذة الزمنية لكل صف.
     """
     BIG = 10 ** 9                                         # bigger than any time value
-    # Safety check: the glued value must fit in int64 (2^63 - 1 ≈ 9.2e18)
-    max_code = int(codes.max()) if len(codes) else 0
-    max_t = int(t.max()) if len(t) else 0
-    if max_code * BIG + max_t > 9_200_000_000_000_000_000:
-        raise OverflowError(
-            f"rolling_count: glued key overflows int64 "
-            f"(max_code={max_code}, max_t={max_t}, BIG={BIG}). "
-            "Reduce BIG or re-encode group codes."
-        )
     order = np.lexsort((t, codes))
     glued = codes[order].astype("int64") * BIG + t[order]
     first_in_window = np.searchsorted(glued, glued - seconds, side="left")
@@ -162,39 +151,39 @@ def add_rolling(df, key, prefix, windows):
     for name, seconds in windows.items():
         df[f"{prefix}_count_{name}"] = rolling_count(codes, t, seconds)
 
-# feature engineering: add new columns to the dataframe. Rows must be in time order.
+
 def add_features(df):
     """Create the new columns. Rows must be in time order."""
     df = df.sort_values("TransactionDT").reset_index(drop=True)
     day = df["TransactionDT"] // 86400            # TransactionDT = seconds from some start date
 
-    #  time (hour as a circle: 23h and 0h are close) 
+    # --- time (hour as a circle: 23h and 0h are close) ---
     hour = (df["TransactionDT"] / 3600) % 24
     df["hour_sin"] = np.sin(2 * np.pi * hour / 24)
     df["hour_cos"] = np.cos(2 * np.pi * hour / 24)
     df["dow"] = day % 7
 
-    #  amount and simple flags 
+    # --- amount and simple flags ---
     df["amt_decimal"] = df["TransactionAmt"] % 1          # ex: 59.00 vs 59.37
     df["email_same"] = (df["P_emaildomain"] == df["R_emaildomain"]).astype("float32")
     mapping = {"T": 1.0, "F": 0.0, "M0": 0.0, "M1": 1.0, "M2": 2.0}
     for col in M_COLS:
         df[col] = df[col].map(mapping).astype("float32")
 
-    #  normalized D columns: (D - today) is almost the same number for every transaction of a client 
+    # --- normalized D columns: (D - today) is almost the same number for every transaction of a client ---
     day_float = df["TransactionDT"] / 86400
     for name in DN_COLS:
         d = name.replace("Dn_", "")
         df[name] = (df[d] - day_float).astype("float32")
 
-    #  how many values are missing in each row (missing itself is a signal) 
+    # --- how many values are missing in each row (missing itself is a signal) ---
     v_present = [c for c in V_COLS if c in df.columns]
     id_present = [c for c in ID_NUM_COLS + ID_CAT_COLS + ["DeviceType", "DeviceInfo"] if c in df.columns]
     df["na_count_D"] = df[D_COLS].isna().sum(axis=1)
     df["na_count_V"] = df[v_present].isna().sum(axis=1)
     df["na_count_id"] = df[id_present].isna().sum(axis=1)
 
-    #  "client id" 
+    # --- "client id" ---
     # card + address = probably the same person
     df["card_key"] = df["card1"].astype(str) + "_" + df["addr1"].astype(str)
     # D1 = days since the card's first transaction, so (day - D1) = the day the card started.
@@ -202,17 +191,17 @@ def add_features(df):
     start_day = (day - df["D1"]).round()
     df["uid"] = df["card_key"] + "_" + start_day.astype(str)
 
-    #  behaviour history of the client (all use the past only) 
+    # --- behaviour history of the client (all use the past only) ---
     add_history(df, "card_key", "card")
     add_history(df, "uid", "uid")
     add_rolling(df, "uid", "uid", {"1h": 3600, "1d": 86400, "7d": 7 * 86400})
     add_rolling(df, "card1", "card1", {"1d": 86400})
 
-    #  aggregates over the client (past rows only) 
+    # --- aggregates over the client (past rows only) ---
     add_past_aggs(df, "uid", "uid", UID_MEAN, UID_STD)
     add_past_aggs(df, "card_key", "card", CARD_MEAN, CARD_STD)
 
-    #  combinations: how busy was this card+address+email in the last day / week 
+    # --- combinations: how busy was this card+address+email in the last day / week ---
     for name, cols in COMBOS.items():
         key = df[cols[0]].astype(str)
         for c in cols[1:]:
@@ -221,6 +210,51 @@ def add_features(df):
         add_rolling(df, "_combo_key", f"combo_{name}", COMBO_WINDOWS)
     df = df.drop(columns="_combo_key")
     return df
+
+
+#  graph (used by the GNN) 
+# Each transaction is a node. It is connected to the LAST k EARLIER transactions that share
+# an entity with it (same client, same card+address, same device, same email+address).
+# Edges only point from the past to the present, so the graph never leaks the future.
+RELATIONS = ["uid", "card_key", "DeviceInfo", "email_addr"]
+N_NEIGHBORS = 10
+MAX_GROUP_SIZE = 1000      # an entity with more transactions than this is "generic" (ex: device = "Windows")
+
+
+def recent_neighbors(codes, k):
+    """For each row: row numbers of the previous k rows with the same code (-1 = none).
+    Rows must already be in time order. codes < 0 means 'no entity'."""
+    n = len(codes)
+    order = np.argsort(codes, kind="stable")            # stable: keeps the time order inside each group
+    sorted_codes = codes[order]
+    pos = np.arange(n)
+    is_first = np.r_[True, sorted_codes[1:] != sorted_codes[:-1]]
+    group_start = np.maximum.accumulate(np.where(is_first, pos, 0))
+    rank = pos - group_start                            # how many rows of the same group came before
+
+    out = np.full((n, k), -1, dtype="int32")
+    for j in range(1, k + 1):                           # j-th previous row of the group
+        ok = rank >= j
+        out[order[ok], j - 1] = order[pos[ok] - j]
+    out[codes < 0] = -1
+    return out
+
+
+def build_neighbor_table(df, k=N_NEIGHBORS, max_group_size=MAX_GROUP_SIZE):
+    """Array (rows, relations, k) with the neighbour row numbers. df must be in time order."""
+    has_card = df["card1"].notna() & df["addr1"].notna()
+    keys = {"uid": df["uid"].where(df["D1"].notna() & has_card),
+            "card_key": df["card_key"].where(has_card),
+            "DeviceInfo": df["DeviceInfo"],
+            "email_addr": (df["P_emaildomain"].astype(str) + "_" + df["addr1"].astype(str))
+                          .where(df["P_emaildomain"].notna() & df["addr1"].notna())}
+    table = np.full((len(df), len(RELATIONS), k), -1, dtype="int32")
+    for r, name in enumerate(RELATIONS):
+        codes, _ = pd.factorize(keys[name])             # missing values -> -1
+        sizes = np.bincount(codes[codes >= 0], minlength=codes.max() + 1)
+        codes = np.where((codes >= 0) & (sizes[np.maximum(codes, 0)] <= max_group_size), codes, -1)
+        table[:, r, :] = recent_neighbors(codes, k)
+    return table
 
 
 #  preprocessing 
@@ -324,6 +358,7 @@ class Preprocessor:
 def prepare(data_dir, train_frac=0.70, val_frac=0.15):
     """Full pipeline: read -> features -> time split -> encode. Returns a dict of arrays."""
     df = add_features(load_raw(data_dir))
+    neighbors = build_neighbor_table(df)               # for the GNN (row numbers of the whole sorted data)
 
     # split by time (rows are sorted by TransactionDT)
     n = len(df)
@@ -332,7 +367,8 @@ def prepare(data_dir, train_frac=0.70, val_frac=0.15):
 
     prep = Preprocessor().fit(parts["train"])
 
-    out = {"feature_names": np.array(prep.feature_names)}
+    # splits are consecutive in time, so row numbers in `neighbors` match vstack(train, val, test)
+    out = {"feature_names": np.array(prep.feature_names), "neighbors": neighbors, "relations": np.array(RELATIONS)}
     for name, part in parts.items():
         out[f"X_{name}"] = prep.transform(part).values
         out[f"id_{name}"] = part["TransactionID"].values.astype("int64")    # needed later by the API

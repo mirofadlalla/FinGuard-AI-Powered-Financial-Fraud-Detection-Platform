@@ -29,7 +29,7 @@ X_tr, y_tr = d["X_train"], d["y_train"].astype("float32")
 X_va, y_va, amt_va = d["X_val"], d["y_val"].astype("float32"), d["amount_val"]
 X_te, y_te, amt_te = d["X_test"], d["y_test"].astype("float32"), d["amount_test"]
 
-pos_weight = float((y_tr == 0).sum() / (y_tr == 1).sum()) # for example 100:1 legit:fraud, used in weighted BCE loss
+pos_weight = float((y_tr == 0).sum() / (y_tr == 1).sum())
 # the neural net cannot handle NaN: replace by 0 (= the mean after scaling)
 X_tr, X_va, X_te = [np.nan_to_num(x, nan=0.0) for x in (X_tr, X_va, X_te)]
 n_features = X_tr.shape[1]
@@ -49,6 +49,7 @@ strategies = {
 }
 
 runs = []
+mlp_val, mlp_test = [], []      # predictions of the plain BCE MLP (used by the ensemble script)
 for seed in range(n_seeds):
     for name, (loss_kind, oversample) in strategies.items():
         torch.manual_seed(seed)
@@ -64,6 +65,9 @@ for seed in range(n_seeds):
 
         p_val = predict(model, val_loader, device)
         p_test = predict(model, test_loader, device)
+        if name == "MLP + BCE":
+            mlp_val.append(p_val)
+            mlp_test.append(p_test)
         for op_name, thr in operating_points(y_va, p_val, amt_va).items():
             row = report(y_te, p_test, amt_te, thr, f"{name} @{op_name}")
             row["seed"] = seed
@@ -72,6 +76,8 @@ for seed in range(n_seeds):
         best_val = max(h["val_pr_auc"] for h in history)
         print(f"seed {seed} | {name:26s} | epochs {len(history):2d} | best val PR-AUC {best_val:.4f}")
 
+if mlp_val:
+    np.savez(ROOT / "artifacts" / "preds_mlp.npz", val=np.mean(mlp_val, axis=0), test=np.mean(mlp_test, axis=0))
 runs = pd.DataFrame(runs)
 runs.to_csv(ROOT / "artifacts" / "mlp_all_runs.csv", index=False)
 summary = summarize(runs)

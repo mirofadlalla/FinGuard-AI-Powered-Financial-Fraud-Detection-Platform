@@ -5,8 +5,8 @@ class FastLoader:
     """Small batch loader. It slices big tensors directly, which is much faster
     than building a PyTorch Dataset that returns one row at a time."""
 
-    def __init__(self, X, y, batch_size=2048, shuffle=False, fraud_weight=None, device="cpu"):
-        self.X = torch.as_tensor(X, dtype=torch.float32, device=device)
+    def __init__(self, X, y, batch_size=2048, shuffle=False, fraud_weight=None, device="cpu", x_dtype=torch.float32):
+        self.X = torch.as_tensor(X, dtype=x_dtype, device=device)
         self.y = torch.as_tensor(y, dtype=torch.float32, device=device)
         self.batch_size = batch_size
         self.shuffle = shuffle
@@ -36,5 +36,5 @@ class FastLoader:
             yield self.X[batch], self.y[batch]
 
 
-def make_loader(X, y, batch_size=2048, shuffle=False, fraud_weight=None, device="cpu"):
-    return FastLoader(X, y, batch_size, shuffle, fraud_weight, device)
+def make_loader(X, y, batch_size=2048, shuffle=False, fraud_weight=None, device="cpu", x_dtype=torch.float32):
+    return FastLoader(X, y, batch_size, shuffle, fraud_weight, device, x_dtype)

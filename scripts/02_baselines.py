@@ -21,10 +21,7 @@ n_seeds = int(sys.argv[2]) if len(sys.argv) > 2 else 3
 (ROOT / "artifacts").mkdir(exist_ok=True)
 
 d = np.load(data_dir / "ieee_ready.npz", allow_pickle=True)
-
 names = list(d["feature_names"])
-
-# --- load the data ---
 X_tr, y_tr = d["X_train"], d["y_train"]
 X_va, y_va, amt_va = d["X_val"], d["y_val"], d["amount_val"]
 X_te, y_te, amt_te = d["X_test"], d["y_test"], d["amount_test"]
@@ -44,16 +41,18 @@ print("XGBoost device:", device)
 ratio = (y_tr == 0).sum() / (y_tr == 1).sum()    # legit transactions for each fraud
 
 runs = []
+
+
 def evaluate(model, name, seed, fix_nan=False):
     # LogReg cannot handle NaN, so there we replace NaN by 0 (= the mean after scaling)
     fix = (lambda x: np.nan_to_num(x, nan=0.0)) if fix_nan else (lambda x: x)
-    p_val = model.predict_proba(fix(X_va))[:, 1] # only the fraud probability second column
+    p_val = model.predict_proba(fix(X_va))[:, 1]
     p_test = model.predict_proba(fix(X_te))[:, 1]
-    
     for op_name, thr in operating_points(y_va, p_val, amt_va).items():
         row = report(y_te, p_test, amt_te, thr, f"{name} @{op_name}")
         row["seed"] = seed
         runs.append(row)
+    return p_val, p_test
 
 
 # --- Logistic Regression (no randomness, so one run) ---
@@ -63,6 +62,7 @@ logreg.fit(np.nan_to_num(X_tr, nan=0.0), y_tr)
 evaluate(logreg, "LogReg", 0, fix_nan=True)
 
 # --- XGBoost, one run per seed ---
+xgb_val, xgb_test = [], []
 for seed in range(n_seeds):
     print(f"Training XGBoost, seed {seed} ...")
     xgb = XGBClassifier(n_estimators=6000, max_depth=9, learning_rate=0.05, subsample=0.8,
@@ -70,8 +70,11 @@ for seed in range(n_seeds):
                         early_stopping_rounds=100, device=device, random_state=seed)
     xgb.fit(X_tr, y_tr, eval_set=[(X_va, y_va)], verbose=False)
     print(f"   best round: {xgb.best_iteration}")
-    evaluate(xgb, "XGBoost", seed)
+    p_v, p_t = evaluate(xgb, "XGBoost", seed)
+    xgb_val.append(p_v)
+    xgb_test.append(p_t)
 
+np.savez(ROOT / "artifacts" / "preds_xgb.npz", val=np.mean(xgb_val, axis=0), test=np.mean(xgb_test, axis=0))
 runs = pd.DataFrame(runs)
 runs.to_csv(ROOT / "artifacts" / "baseline_all_runs.csv", index=False)
 summary = summarize(runs)
