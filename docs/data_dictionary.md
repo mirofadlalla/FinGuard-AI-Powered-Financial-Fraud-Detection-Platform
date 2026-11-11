@@ -25,5 +25,14 @@ All features use only information from BEFORE the transaction.
 | Combo counts | transactions in the last 1d / 7d for card1+addr1+email, card3+addr1+email, card4+addr1+email |
 | V blocks | one "is missing" flag per block of V columns; V columns reduced by (same missing count -> correlation > 0.75 -> keep one) |
 
+## Graph for the GNN (`neighbors` in `data/ieee_ready.npz`)
+| relation | two transactions are connected when they share |
+|---|---|
+| uid | the same client id (card + address + start day) |
+| card_key | the same card + billing address |
+| DeviceInfo | the same device (only devices with <= 1000 transactions) |
+| email_addr | the same email domain + address |
+Each transaction keeps the last 10 EARLIER neighbours per relation (row numbers, -1 = none).
+
 ## Preprocessing
 Missing numbers stay NaN (XGBoost uses them; LogReg / MLP get 0 = the mean). Long-tail columns -> signed log. Then standardize (train mean/std) and clip to [-5, 5].

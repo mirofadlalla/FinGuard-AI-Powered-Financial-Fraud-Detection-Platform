@@ -5,7 +5,10 @@
 - [x] Feature groups ablation script (`04_ablation.py`)
 - [ ] Ablation: residual blocks vs plain MLP
 - [ ] Categorical embeddings for the MLP (card1, addr1, emails, DeviceInfo)
-- [ ] GNN (GraphSAGE) on the transaction - card / address / email / device graph
+- [x] GNN: relational GraphSAGE (1 hop) on a time-causal graph (`07_train_gnn.py`) - run the smoke test first
+- [x] Ensemble / final comparison (`08_ensemble.py`)
+- [x] Prometheus + Grafana + alerts + live drift + live quality (`docs/MONITORING.md`)
+- [ ] 2-hop GNN, neighbour labels with a label delay, serve the GNN / ensemble in the API
 - [x] MLflow tracking + registry + promotion gate (`05_train_final.py`)
 - [x] SHAP explanations (TreeSHAP) per flagged transaction
 - [x] FastAPI + PostgreSQL + Redis + Docker compose

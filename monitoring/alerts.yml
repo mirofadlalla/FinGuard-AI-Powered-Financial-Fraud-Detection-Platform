@@ -1,0 +1,54 @@
+# Alerts are visible in Prometheus (http://localhost:9090/alerts) and in Grafana.
+# Numbers are starting points: tune them after you see how the system behaves on real traffic.
+groups:
+  - name: finguard-system
+    rules:
+      - alert: ApiDown
+        expr: up{job="finguard-api"} == 0
+        for: 1m
+        labels: {severity: critical}
+        annotations: {summary: "FinGuard API is not responding"}
+
+      - alert: HighErrorRate
+        expr: sum(rate(finguard_requests_total{status=~"5.."}[5m])) / sum(rate(finguard_requests_total[5m])) > 0.05
+        for: 5m
+        labels: {severity: critical}
+        annotations: {summary: "More than 5% of requests fail"}
+
+      - alert: SlowScoring
+        expr: histogram_quantile(0.95, sum by (le) (rate(finguard_request_latency_seconds_bucket{endpoint="/score/{txn_id}"}[5m]))) > 2
+        for: 5m
+        labels: {severity: warning}
+        annotations: {summary: "p95 latency of /score is above 2 seconds"}
+
+  - name: finguard-model
+    rules:
+      - alert: ScoreDrift
+        expr: finguard_score_psi > 0.25
+        for: 10m
+        labels: {severity: warning}
+        annotations: {summary: "The fraud score distribution changed a lot (PSI > 0.25): investigate / retrain"}
+
+      - alert: ManyFeaturesDrifting
+        expr: finguard_features_big_shift > 40
+        for: 15m
+        labels: {severity: warning}
+        annotations: {summary: "Many input features moved far from training (tune this number after the first week)"}
+
+      - alert: TooManyFlagged
+        expr: finguard_flagged_share_recent > 2 * on() finguard_baseline{metric="share_flagged"}
+        for: 10m
+        labels: {severity: warning}
+        annotations: {summary: "We flag more than twice as many transactions as in testing (analyst workload / attack?)"}
+
+      - alert: TooFewFlagged
+        expr: finguard_flagged_share_recent < 0.25 * on() finguard_baseline{metric="share_flagged"}
+        for: 30m
+        labels: {severity: warning}
+        annotations: {summary: "We flag far fewer transactions than in testing (model may be blind to a new pattern)"}
+
+      - alert: LivePrecisionDrop
+        expr: finguard_labeled_transactions > 100 and finguard_live_precision < 0.6 * on() finguard_baseline{metric="review_precision"}
+        for: 30m
+        labels: {severity: critical}
+        annotations: {summary: "Real precision fell below 60% of the precision measured in testing"}

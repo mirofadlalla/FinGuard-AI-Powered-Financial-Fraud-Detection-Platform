@@ -44,11 +44,9 @@ class GraphSAGEFraud(nn.Module):
             valid = (ids >= 0).unsqueeze(-1).float()                   # (batch, k, 1)
             feats = self.X_all[ids.clamp(min=0)] * valid               # (batch, k, features)
             count = valid.sum(dim=1)                                   # (batch, 1) how many neighbours
-            mean = feats.sum(dim=1) / count.clamp(min=1)               # average of the neighbours حساب متوسط Features الجيران
-            
-            # هنا بنعمل Concatenation بين:
-            # - mean: متوسط Features الجيران.
-            # - count / self.k: نسبة عدد الجيران للحد الأقصى.
+            mean = feats.sum(dim=1) / count.clamp(min=1)               # (batch, features) mean of valid neighbours
+
+            # Concatenate the neighbour mean with the normalised neighbour count, then add to h.
             h = h + layer(torch.cat([mean, count / self.k], dim=1)) 
 
         return self.head(self.blocks(self.after_sum(h))).squeeze(-1)

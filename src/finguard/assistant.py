@@ -107,11 +107,18 @@ def llm_explanation(result, question):
 
 
 def answer(question, result):
-    """Final text for the analyst."""
+    """Final text for the analyst.
+
+    Returns (text, source) where source is 'llm' or 'template' so the caller
+    can track which path was used (e.g. for Prometheus metrics).
+    """
     flagged = result["decision"] != "APPROVE"
     head = f"Transaction #{result['txn_id']} was " + ("flagged as high risk." if flagged else "approved (low risk).")
-    explanation = llm_explanation(result, question) or template_explanation(result)
+    llm_text   = llm_explanation(result, question)
+    source     = "llm" if llm_text else "template"
+    explanation = llm_text or template_explanation(result)
     body = f"{head}\n\n{explanation}\n"
     if flagged:
         body += f"\nMain factors:\n{factors_text(result)}\n"
-    return body + f"\nRisk Score: {result['fraud_prob']:.2f}\nDecision: {result['decision']}"
+    text = body + f"\nRisk Score: {result['fraud_prob']:.2f}\nDecision: {result['decision']}"
+    return text, source

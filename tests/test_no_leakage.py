@@ -1,6 +1,7 @@
 """Tests that protect us from the worst bug in fraud models: looking at the future.
 
-Also covers: PSI drift, business metrics, database layer, Cache, and model architecture.
+Also covers: PSI drift, business metrics, database layer, Cache, Feedback, LiveMonitor,
+quality_stats, and model architecture.
 """
 import sys
 from pathlib import Path
@@ -21,7 +22,7 @@ from finguard.metrics import (
     no_model_cost,
     summarize,
 )
-from finguard.db import Cache, make_engine, save_decision, get_decision, recent_stats
+from finguard.db import Cache, make_engine, save_decision, get_decision, recent_stats, save_feedback, quality_stats
 from finguard.models import FraudMLP, ResBlock
 
 
@@ -251,3 +252,83 @@ def test_assistant_ignores_short_numbers():
     """Numbers shorter than 4 digits should be ignored."""
     assert find_transaction_id("3 items in cart") is None
     assert find_transaction_id("score: 99 out of 100") is None
+
+
+# ─────────────────────── feedback / quality_stats tests ─────────────────────
+
+def test_save_and_retrieve_feedback(sqlite_engine):
+    from finguard.db import save_feedback, quality_stats
+    # Save a decision first
+    save_decision(sqlite_engine, {
+        "txn_id": 5001, "fraud_prob": 0.85, "decision": "FRAUD_BLOCK",
+        "model_version": "v-test", "factors": [],
+    })
+    save_feedback(sqlite_engine, 5001, is_fraud=True)
+    stats = quality_stats(sqlite_engine)
+    assert stats["labeled"] == 1
+    assert stats["tp"] == 1
+    assert stats["precision"] == 1.0
+    assert stats["recall"] == 1.0
+
+
+def test_quality_stats_false_positive(sqlite_engine):
+    from finguard.db import save_feedback, quality_stats
+    save_decision(sqlite_engine, {
+        "txn_id": 5002, "fraud_prob": 0.9, "decision": "FRAUD_BLOCK",
+        "model_version": "v-test", "factors": [],
+    })
+    save_feedback(sqlite_engine, 5002, is_fraud=False)   # false alarm
+    stats = quality_stats(sqlite_engine)
+    assert stats["fp"] >= 1
+    assert stats["precision"] < 1.0
+
+
+def test_quality_stats_empty(sqlite_engine):
+    from finguard.db import quality_stats
+    stats = quality_stats(sqlite_engine)
+    assert stats["labeled"] == 0
+    assert stats["precision"] is None
+    assert stats["recall"] is None
+
+
+# ─────────────────────── LiveMonitor in-memory quality ───────────────────────
+
+def test_live_monitor_quality():
+    from finguard.monitor import LiveMonitor
+    import tempfile, json, os
+
+    # Build a minimal reference.json so LiveMonitor can be constructed
+    with tempfile.TemporaryDirectory() as tmp:
+        ref = {"__score__": {"edges": [], "props": [1.0, 0.0]}}
+        (Path(tmp) / "reference.json").write_text(json.dumps(ref))
+        mon = LiveMonitor(tmp, feature_names=[], review_thr=0.5)
+
+    # Simulate 3 scored transactions (no features needed for quality test)
+    mon._window = {1001: ("FRAUD_BLOCK", 0.9), 1002: ("APPROVE", 0.1), 1003: ("FRAUD_REVIEW", 0.6)}
+
+    # Feedback: 1001 is true fraud (TP), 1002 is true fraud (FN), 1003 is legit (FP)
+    mon._feedback = {1001: True, 1002: True, 1003: False}
+
+    q = mon.quality()
+    assert q["labeled"] == 3
+    assert q["tp"] == 1   # 1001 flagged + fraud
+    assert q["fp"] == 1   # 1003 flagged + legit
+    assert q["fn"] == 1   # 1002 approved + fraud
+    assert round(q["precision"], 4) == 0.5    # 1/(1+1)
+    assert round(q["recall"], 4) == 0.5       # 1/(1+1)
+
+
+def test_live_monitor_add_feedback_triggers_gauge_update():
+    """add_feedback should not raise even when Prometheus gauges are present."""
+    from finguard.monitor import LiveMonitor
+    import tempfile, json
+
+    with tempfile.TemporaryDirectory() as tmp:
+        ref = {"__score__": {"edges": [], "props": [1.0, 0.0]}}
+        (Path(tmp) / "reference.json").write_text(json.dumps(ref))
+        mon = LiveMonitor(tmp, feature_names=[], review_thr=0.5)
+
+    mon._window[9999] = ("FRAUD_BLOCK", 0.95)
+    mon.add_feedback(9999, is_fraud=True)   # must not raise
+    q = mon.quality()
+    assert q["labeled"] == 1

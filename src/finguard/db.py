@@ -3,7 +3,7 @@ import json
 import logging
 import os
 from datetime import datetime, timezone
-from sqlalchemy import BigInteger, Column, DateTime, Float, JSON, String, create_engine, func, select
+from sqlalchemy import BigInteger, Boolean, Column, DateTime, Float, JSON, String, create_engine, select
 from sqlalchemy.orm import Session, declarative_base
 
 log = logging.getLogger(__name__)
@@ -24,6 +24,18 @@ class Decision(Base):
     def as_dict(self):
         return {"txn_id": int(self.txn_id), "fraud_prob": round(self.fraud_prob, 4), "decision": self.decision,
                 "model_version": self.model_version, "factors": self.factors or []}
+
+
+class Feedback(Base):
+    """Real outcome for a transaction (e.g. chargeback confirmed = fraud, cleared = legit).
+
+    These arrive asynchronously (hours / days after the decision) and are used to compute
+    live precision and recall so we can tell if the model quality is degrading in production.
+    """
+    __tablename__ = "feedback"
+    txn_id = Column(BigInteger, primary_key=True)
+    is_fraud = Column(Boolean, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
 
 def make_engine(url=None):
@@ -67,6 +79,45 @@ def recent_stats(engine, limit=1000):
     return {"n": len(rows), "mean_prob": round(sum(probs) / len(probs), 4), "decisions": counts}
 
 
+def save_feedback(engine, txn_id: int, is_fraud: bool):
+    """Record the real outcome for a transaction (upsert)."""
+    with Session(engine) as session:
+        session.merge(Feedback(txn_id=txn_id, is_fraud=is_fraud))
+        session.commit()
+
+
+def quality_stats(engine, limit=1000):
+    """Live precision / recall computed from feedback joined with decisions.
+
+    Only transactions that have BOTH a decision AND a real outcome are counted.
+    Returns a dict with keys: labeled, tp, fp, fn, precision, recall.
+    """
+    with Session(engine) as session:
+        rows = session.execute(
+            select(Decision.decision, Feedback.is_fraud)
+            .join(Feedback, Decision.txn_id == Feedback.txn_id)
+            .order_by(Decision.created_at.desc())
+            .limit(limit)
+        ).all()
+
+    if not rows:
+        return {"labeled": 0, "precision": None, "recall": None}
+
+    flagged_fraud = sum(1 for d, f in rows if d != "APPROVE" and f)
+    flagged_legit = sum(1 for d, f in rows if d != "APPROVE" and not f)
+    missed_fraud  = sum(1 for d, f in rows if d == "APPROVE" and f)
+
+    tp, fp, fn = flagged_fraud, flagged_legit, missed_fraud
+    precision = tp / max(tp + fp, 1)
+    recall    = tp / max(tp + fn, 1)
+    return {
+        "labeled":   len(rows),
+        "tp": tp, "fp": fp, "fn": fn,
+        "precision": round(precision, 4),
+        "recall":    round(recall, 4),
+    }
+
+
 class Cache:
     """Tiny Redis cache. If Redis is not available the API still works, just without cache."""
 
@@ -93,9 +144,10 @@ class Cache:
             log.debug("Redis GET failed for key %r", key, exc_info=True)
             return None
 
-    def set(self, key, value):
+    def set(self, key, value, ttl: int | None = None):
+        """Persist *value* under *key* with an optional per-call TTL override."""
         try:
             if self.client:
-                self.client.setex(key, self.ttl, json.dumps(value))
+                self.client.setex(key, ttl if ttl is not None else self.ttl, json.dumps(value))
         except Exception:
             log.debug("Redis SET failed for key %r", key, exc_info=True)

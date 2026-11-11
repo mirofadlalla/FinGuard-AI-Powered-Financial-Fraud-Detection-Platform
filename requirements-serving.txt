@@ -6,3 +6,5 @@ httpx
 sqlalchemy
 redis
 psycopg2-binary
+prometheus-client
+groq
