@@ -134,8 +134,23 @@ def rolling_count(codes, t, seconds):
 
     Trick: sort by (group, time), then glue group and time into one number
     so one searchsorted call works for all groups at once.
+
+    Raises OverflowError if any code value is so large that codes * BIG would
+    overflow int64.  The safe limit is 9_200_000_000_000_000_000 // BIG
+    (conservative: leaves headroom for the time offset).  Callers should
+    factorize codes first (pd.factorize gives 0-based integers) so this never
+    fires in practice.
     """
     BIG = 10 ** 9                                         # bigger than any time value
+    # Conservative int64 ceiling that matches what the test asserts.
+    # 9_200_000_000 * BIG = 9.2e18, safely inside int64 max (9.22e18).
+    _MAX_CODE = 9_200_000_000_000_000_000 // BIG          # == 9_200_000_000
+    max_code = int(codes.max()) if len(codes) else 0
+    if max_code > _MAX_CODE:
+        raise OverflowError(
+            f"code value {max_code} > {_MAX_CODE}: multiplying by {BIG} would overflow int64. "
+            "Factorize the codes first (e.g. pd.factorize gives 0-based integers)."
+        )
     order = np.lexsort((t, codes))
     glued = codes[order].astype("int64") * BIG + t[order]
     first_in_window = np.searchsorted(glued, glued - seconds, side="left")

@@ -8,3 +8,6 @@ redis
 psycopg2-binary
 prometheus-client
 groq
+# CPU-only PyTorch — no CUDA driver needed in Docker
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch

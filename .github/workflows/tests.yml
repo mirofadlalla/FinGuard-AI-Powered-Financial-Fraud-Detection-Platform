@@ -5,7 +5,8 @@ on:
   pull_request:
 
 jobs:
-  test:
+  # ── Core tests (no heavy ML deps — fast, always runs) ─────────────────────
+  core:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,6 +19,27 @@ jobs:
         run: pip install -r requirements-test.txt
 
       - name: Run tests
+        env:
+          PYTHONPATH: src
+        run: pytest tests/ -v --tb=short
+
+  # ── Model-architecture tests (torch CPU — heavier, runs on push to main) ──
+  torch:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install test dependencies + torch CPU
+        run: |
+          pip install -r requirements-test.txt
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Run all tests (including torch)
         env:
           PYTHONPATH: src
         run: pytest tests/ -v --tb=short
