@@ -20,7 +20,7 @@ jobs:
 
       - name: Run tests
         env:
-          PYTHONPATH: src
+          PYTHONPATH: .
         run: pytest tests/ -v --tb=short
 
   # ── Model-architecture tests (torch CPU — heavier, runs on push to main) ──
@@ -41,5 +41,5 @@ jobs:
 
       - name: Run all tests (including torch)
         env:
-          PYTHONPATH: src
+          PYTHONPATH: .
         run: pytest tests/ -v --tb=short

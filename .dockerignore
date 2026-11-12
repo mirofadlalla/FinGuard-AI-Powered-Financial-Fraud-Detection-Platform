@@ -1,8 +1,49 @@
+# ── Large binary / data files ─────────────────────────────────────────────────
 data
+*.npz
+*.npy
+*.csv
+
+# ── Artifacts (model is bind-mounted as a volume at runtime) ──────────────────
 artifacts
 mlruns
 mlartifacts
+mlflow_server
 mlflow.db
+
+# ── Databases ────────────────────────────────────────────────────────────────
 finguard.db
+*.db
+*.sqlite
+
+# ── Dev / test / scripts (not needed in serving image) ───────────────────────
+tests
+scripts
+docs
+assets
+
+# ── Python build artifacts ────────────────────────────────────────────────────
 __pycache__
-*.npz
+*.py[cod]
+*.egg-info
+.eggs
+.venv
+venv
+
+# ── CI / environment ──────────────────────────────────────────────────────────
+.github
+.env
+.env.*
+!.env.example
+
+# ── OS / editors ──────────────────────────────────────────────────────────────
+.git
+.DS_Store
+Thumbs.db
+.idea
+.vscode
+*.swp
+*.swo
+
+# ── ZenML local stack ─────────────────────────────────────────────────────────
+.zenml

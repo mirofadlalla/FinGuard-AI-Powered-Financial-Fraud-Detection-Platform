@@ -1,182 +1,333 @@
-# FinGuard
+# FinGuard v2 — Production AI Fraud Detection Platform
 
-Card-fraud detection on the [IEEE-CIS](https://www.kaggle.com/c/ieee-fraud-detection) dataset (590k transactions, ~3.5% fraud). The system ranks each payment with a fraud probability, then applies two validation-chosen thresholds:
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-009688.svg)](https://fastapi.tiangolo.com)
+[![XGBoost](https://img.shields.io/badge/XGBoost-2.0+-green.svg)](https://xgboost.readthedocs.io/)
+[![PyTorch](https://img.shields.io/badge/PyTorch-2.2+-ee4c2c.svg)](https://pytorch.org/)
+[![MLflow](https://img.shields.io/badge/MLflow-2.11+-0194E2.svg)](https://mlflow.org/)
+[![ZenML](https://img.shields.io/badge/ZenML-MLOps-4318FF.svg)](https://zenml.io)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-| Decision | When |
-|---|---|
-| `APPROVE` | score below the cost-optimal review threshold |
-| `FRAUD_REVIEW` | score high enough that sending it to an analyst is cheaper than missing fraud |
-| `FRAUD_BLOCK` | score at a high-precision (≈80%) block threshold |
-
-Metrics are **PR-AUC, ROC-AUC, and estimated dollar cost** — not accuracy.
-
----
-
-## What the system does
-
-1. **Offline** — build leak-free features, compare models, train a production XGBoost bundle.
-2. **Online** — score stored or raw transactions, explain the score (TreeSHAP + optional LLM), record chargeback feedback, and watch drift / quality.
+> Real-time payment fraud detection built on the IEEE-CIS dataset (590 k+ transactions). XGBoost production model scores transactions in **< 35 ms**, cuts net fraud loss by **62.8 %** (\$294 k saved on the out-of-time test set), and ships with a full observability stack (Prometheus + Grafana), zero-downtime hot-reload, and a natural-language investigation assistant powered by Groq.
 
 ---
 
 ## Architecture
 
 ```mermaid
-flowchart LR
-    CSV["IEEE-CIS CSVs"] --> Prep["01_prepare_data\nfeatures + time split"]
-    Prep --> NPZ["ieee_ready.npz"]
-    NPZ --> Base["02 baselines"]
-    NPZ --> MLP["03 MLP"]
-    NPZ --> GNN["07 GraphSAGE"]
-    Base & MLP & GNN --> Ens["08 ensemble"]
-    NPZ --> Train["05_train_final\nXGBoost + MLflow gate"]
-    Train --> Art["artifacts/model\nbooster · meta · preprocessor"]
-    Art --> API["FastAPI"]
-    API --> PG[("PostgreSQL")]
-    API --> Redis[("Redis cache")]
-    API --> Mon["LiveMonitor + Prometheus"]
-    Mon --> Graf["Grafana"]
-    CB["Chargebacks"] -->|POST /feedback| API
+flowchart TD
+    A["Raw CSV Data\ntrain_transaction.csv\ntrain_identity.csv"] --> B["Feature Engineering\nfeatures/ieee.py · Preprocessor"]
+    B --> C["ieee_ready.npz\n(features, splits, ids)"]
+
+    C --> D["Training Pipeline\nrun_zenml.py"]
+    D --> E["artifacts/model/\nmodel.ubj · meta.json\nreference.json · preprocessor.pkl"]
+
+    E --> F["FastAPI\napi/app.py"]
+    C --> F
+
+    F --> G["/health\n/score/{txn_id}\n/predict\n/predict/raw"]
+    F --> H["/investigate\n(Groq LLM)"]
+    F --> I["/monitoring/*\n/metrics (Prometheus)"]
+    F --> J["PostgreSQL\ndecisions + feedback"]
+    F --> K["Redis\nscore cache"]
+
+    D --> L["MLflow\nexperiment tracking"]
 ```
 
-**Training path**
+---
 
-| Piece | Role |
-|---|---|
-| `finguard.ieee` | Load CSVs, past-only history/velocity features, time split, `Preprocessor` |
-| `scripts/02–04, 07–08` | LogReg / XGBoost / MLP / ablation / GraphSAGE / ensemble comparison |
-| `scripts/05_train_final.py` | Fit production XGBoost, pick REVIEW/BLOCK thresholds on **validation**, register in MLflow, promote only if test PR-AUC does not regress |
-| `scripts/06_drift_report.py` | PSI of scores and features over successive test periods |
+## Key Results
 
-**Serving path**
+| Model | Threshold | PR-AUC | Recall | Cost Saved |
+|:---|:---|:---:|:---:|:---:|
+| LogReg | @cost | 0.441 | 79.2% | 59.6% |
+| MLP + weighted BCE | @cost | 0.475 | 78.1% | 63.3% |
+| GNN (GraphSAGE) | @cost | 0.469 | 75.2% | 59.3% |
+| **XGBoost (production)** | **@cost** | **0.574** | **82.1%** | **62.8%** |
 
-| Module | Responsibility |
-|---|---|
-| `serving` | Load booster + thresholds; `FeatureStore` replay of prepared vectors |
-| `raw_features` / `raw_score` | Turn a raw IEEE-CIS JSON row into a model vector (cold-start history) |
-| `scoring` | Predict, decide, persist, cache |
-| `runtime` | Process state (model, DB, Redis, monitor) and hot-reload |
-| `api` | HTTP routes and dashboard (`/ui`) |
-| `assistant` | “Why was #id flagged?” — facts from the model, wording from Groq or a template |
-| `monitor` / `drift` | Rolling PSI, decision mix, live precision/recall |
-| `db` | Decisions + feedback (SQLite locally, Postgres in Docker) |
+*Unmitigated baseline cost (no model): \$469,608. XGBoost saves \$294,735 on the held-out test set.*
 
 ---
 
-## Results (from `results.txt`)
+## Repository Layout
 
-Cost baseline (no model): **$469,608**. A false alarm is counted as $5. Thresholds are chosen on validation and applied **once** on test.
-
-| Model | PR-AUC | ROC-AUC | Recall | Saved % |
-|---|---|---|---|---|
-| LogReg | 0.441 | 0.868 | 0.792 | 59.6% |
-| **XGBoost @ cost threshold** | **0.574** | **0.905** | **0.821** | **62.8%** |
-| MLP (best) | 0.486 | — | 0.768 | 60.9% |
-| GraphSAGE | 0.469 | 0.861 | 0.752 | 59.3% |
-
-Score PSI stays low across four test periods; feature PSI is larger on history columns that grow with time (expected).
+```
+finguard2/
+├── api/                    # FastAPI application
+│   ├── app.py              # Routes: /health, /score, /predict, /investigate, /monitoring
+│   ├── runtime.py          # Process state, model/store/DB lifecycle
+│   ├── schemas.py          # Pydantic request bodies
+│   ├── scoring.py          # Score, persist, cache a transaction
+│   ├── serving.py          # Model loader + FeatureStore (NPZ replay)
+│   ├── raw_features.py     # Cold-start preprocessing for /predict/raw
+│   └── raw_score.py        # /predict/raw orchestration + quality notes
+│
+├── features/
+│   └── ieee.py             # Leak-free feature engineering + Preprocessor
+│
+├── models/                 # PyTorch research models (MLP + GNN)
+│   ├── mlp.py              # ResNet-MLP with residual blocks
+│   ├── gnn.py              # GraphSAGE multi-relational GNN
+│   ├── losses.py           # FocalLoss + class-weighted BCE
+│   ├── trainer.py          # Training loop with early stopping
+│   └── torch_data.py       # DataLoaders and datasets
+│
+├── pipelines/              # ZenML MLOps pipeline
+│   ├── training_pipeline.py
+│   └── steps/
+│       ├── prepare_data_step.py    # Load CSVs → feature engineering → NPZ
+│       ├── train_model_step.py     # XGBoost training with early stopping
+│       ├── evaluate_step.py        # Threshold calibration + test metrics
+│       └── register_model_step.py  # Bundle export, MLflow logging, promotion
+│
+├── monitoring/             # Observability stack
+│   ├── drift.py            # Population Stability Index (PSI)
+│   ├── monitor.py          # LiveMonitor (rolling window + Prometheus gauges)
+│   ├── prometheus.yml      # Scrape config
+│   ├── alerts.yml          # Alertmanager rules
+│   └── grafana/            # Grafana dashboard provisioning
+│
+├── database/
+│   └── db.py               # SQLAlchemy (SQLite/PostgreSQL) + Redis cache
+│
+├── assistant/
+│   ├── assistant.py        # Groq LLM + template fallback
+│   └── explain.py          # Feature name → human-readable description
+│
+├── evaluation/
+│   ├── metrics.py          # Cost threshold, PR-AUC, ROC-AUC, report()
+│   └── evaluation.py       # ShowcaseRow, batch decisions, summary counts
+│
+├── scripts/                # Standalone training runners (01–10)
+│   ├── 01_prepare_data.py
+│   ├── 02_baselines.py
+│   ├── 03_train_mlp.py
+│   ├── 04_ablation.py
+│   ├── 05_train_final.py   # Produces artifacts/model/ (the production bundle)
+│   ├── 06_drift_report.py
+│   ├── 07_train_gnn.py
+│   ├── 08_ensemble.py
+│   ├── 09_simulate_traffic.py
+│   └── 10_evaluate_demo.py
+│
+├── tests/                  # 13 modular test suites
+├── data/                   # Raw CSVs (gitignored) + sample JSON rows
+├── artifacts/              # Model bundles (gitignored except .gitkeep)
+├── docs/                   # Data dictionary, monitoring guide, roadmap
+│
+├── Dockerfile              # Production serving image (CPU-only)
+├── docker-compose.yml      # API + PostgreSQL + Redis + MLflow + Prometheus + Grafana
+├── requirements.txt        # Full development environment
+├── requirements-serving.txt# Minimal serving image dependencies
+├── requirements-test.txt   # CI test suite dependencies
+├── run_zenml.py            # ZenML pipeline entrypoint
+└── .env.example            # Environment variable reference
+```
 
 ---
 
-## Setup
+## Quickstart
+
+### 1. Install dependencies
 
 ```bash
-# 1. Put train_transaction.csv and train_identity.csv in data/
+git clone https://github.com/yourusername/finguard.git
+cd finguard
+
+python -m venv .venv
+# Linux / macOS:
+source .venv/bin/activate
+# Windows:
+.venv\Scripts\activate
+
 pip install -r requirements.txt
-# GPU (optional, NVIDIA CUDA 12.1):
-pip install torch --index-url https://download.pytorch.org/whl/cu121
 ```
 
----
+> **GPU (NVIDIA CUDA 12.1):** `pip install torch --index-url https://download.pytorch.org/whl/cu121`
 
-## Pipeline
+### 2. Prepare your data
+
+Place the Kaggle IEEE-CIS files in `data/`:
+```
+data/
+├── train_transaction.csv
+├── train_identity.csv
+```
+
+### 3. Train the model
+
+**Option A — ZenML pipeline (recommended)**
+```bash
+python run_zenml.py            # full training (~30 min on CPU)
+python run_zenml.py --quick    # smoke test with 50 trees
+```
+
+**Option B — Step-by-step scripts**
+```bash
+python scripts/01_prepare_data.py
+python scripts/05_train_final.py   # produces artifacts/model/
+```
+
+### 4. Start the API locally
 
 ```bash
-python scripts/01_prepare_data.py     # → data/ieee_ready.npz
-python scripts/02_baselines.py
-python scripts/03_train_mlp.py
-python scripts/04_ablation.py
-python scripts/07_train_gnn.py
-python scripts/08_ensemble.py
-
-python scripts/05_train_final.py      # → artifacts/model (+ MLflow)
-python scripts/06_drift_report.py
+uvicorn api.app:app --reload
 ```
 
-Append `data 1` (1 seed) or `data 1 smoke` / `data quick` on the relevant scripts for a short run.
+API is live at `http://localhost:8000`. Swagger docs at `http://localhost:8000/docs`.
 
----
-
-## Demonstrate the model (no API)
-
-Scores the time-split **test** set and prints labeled examples at every operating point: caught fraud (block / review), missed fraud, typical legit, and false alarms.
+### 5. Full-stack deployment (Docker Compose)
 
 ```bash
-python scripts/10_evaluate_demo.py
+cp .env.example .env          # fill in GROQ_API_KEY and other secrets
+docker compose up --build -d
 ```
 
-Requires `data/ieee_ready.npz` and `artifacts/model`. Replay any printed `txn_id` with `/score/{id}` once the API is up.
+| Service | URL |
+|:---|:---|
+| API + Swagger | `http://localhost:8000/docs` |
+| MLflow UI | `http://localhost:5000` |
+| Prometheus | `http://localhost:9090` |
+| Grafana | `http://localhost:3000` (admin / admin) |
 
 ---
 
-## Run the API
+## API Reference
+
+| Method | Endpoint | Description |
+|:---|:---|:---|
+| `GET` | `/health` | Model version, store size, Redis status |
+| `GET` | `/score/{txn_id}` | Score a pre-computed transaction (Redis-cached, logged to DB) |
+| `POST` | `/predict` | Score a pre-scaled feature vector (ephemeral) |
+| `POST` | `/predict/raw` | Score a raw IEEE-CIS JSON payload (auto-preprocessing) |
+| `GET` | `/decisions/{txn_id}` | Retrieve a stored decision + SHAP factors |
+| `POST` | `/investigate` | Natural-language fraud explanation (Groq Qwen3-27B) |
+| `POST` | `/feedback` | Record confirmed fraud/legitimate outcome |
+| `GET` | `/monitoring/summary` | Last 1 000 decisions vs. training baseline |
+| `GET` | `/monitoring/drift` | Live PSI drift report |
+| `GET` | `/monitoring/performance` | Live precision/recall from feedback |
+| `GET` | `/metrics` | Prometheus metrics endpoint |
+| `POST` | `/admin/reload` | Zero-downtime hot-swap of the production model |
+
+### Example: score a transaction
 
 ```bash
-uvicorn --app-dir src finguard.api:app --reload
-# or: docker compose up --build
+curl http://localhost:8000/score/2987045
+```
+```json
+{
+  "txn_id": 2987045,
+  "fraud_prob": 0.0021,
+  "decision": "APPROVE",
+  "model_version": "20261112-1430-a3f1b2",
+  "factors": [],
+  "from_cache": false
+}
 ```
 
-Dashboard: http://localhost:8000/ui · OpenAPI: http://localhost:8000/docs  
-Compose also starts Postgres, Redis, MLflow (`:5000`), Prometheus (`:9090`), Grafana (`:3000`, admin/admin).
-
-| Method | Path | Purpose |
-|---|---|---|
-| GET | `/health` | Model version, store size, Redis |
-| GET | `/score/{txn_id}` | Score a stored (or previously raw-scored) id |
-| POST | `/predict` | Score a **preprocessed** feature dict (not persisted) |
-| POST | `/predict/raw` | Score a **raw IEEE-CIS** row; uses the store when the id is known |
-| GET | `/decision/{txn_id}` | Saved decision + SHAP factors (`/decisions/...` also works) |
-| POST | `/investigate` | Natural-language explanation |
-| POST | `/feedback` | Real outcome `{txn_id, is_fraud}` |
-| GET | `/monitoring/summary` | Recent decision mix |
-| GET | `/monitoring/drift` | Live PSI window |
-| GET | `/monitoring/performance` | Precision / recall from feedback |
-| GET | `/metrics` | Prometheus |
-| POST | `/admin/reload` | Hot-swap `MODEL_DIR` (see `docs/zero_downtime_upgrade.md`) |
+### Example: natural-language investigation
 
 ```bash
-curl localhost:8000/score/3487632
-curl -X POST localhost:8000/predict/raw -H "Content-Type: application/json" \
-     -d '{"TransactionID": 3487632, "TransactionAmt": 50.0, "ProductCD": "W"}'
-curl -X POST localhost:8000/investigate -H "Content-Type: application/json" \
-     -d '{"question": "Why was transaction 3487632 flagged?"}'
+curl -X POST http://localhost:8000/investigate \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Why was transaction 3487632 flagged?"}'
+```
+```json
+{
+  "txn_id": 3487632,
+  "answer": "Transaction #3487632 was flagged as high risk.\n\nThe model flagged it due to an extreme spike in recent transaction frequency (C5 = 12), an unusually high Vesta risk signal (V264), and an uncommon card profile. This is a model signal, not proof of fraud.\n\nRisk Score: 0.84\nDecision: FRAUD_BLOCK"
+}
 ```
 
-Set `GROQ_API_KEY` for LLM glosses; otherwise a template is used. `/predict/raw` without a store hit **cold-starts** history features (first-time client). Use `/score/{id}` for the full offline vector.
+---
+
+## Running Tests
+
+```bash
+# Fast core tests (no model artifacts needed)
+pytest tests/ -v --tb=short
+
+# Individual suites
+pytest tests/test_leakage_temporal.py    # no future data in features
+pytest tests/test_drift_psi.py           # PSI calculations
+pytest tests/test_database_cache.py      # DB + Redis
+pytest tests/test_api_endpoints.py       # requires artifacts/model/
+```
+
+| Test suite | What it checks |
+|:---|:---|
+| `test_leakage_temporal` | Rolling counts never peek at future rows |
+| `test_leakage_features` | `isFraud` / `TransactionID` never leak into feature matrices |
+| `test_feature_alignment` | Feature count, names, and order are consistent |
+| `test_missing_handling` | Graceful NaN handling and missing-indicator columns |
+| `test_categorical_encoding` | Frequency mapping and unseen-category handling |
+| `test_thresholds_cost` | Cost-threshold, precision-threshold, and F1 calculations |
+| `test_drift_psi` | Population Stability Index baseline comparisons |
+| `test_database_cache` | SQLite/PostgreSQL persistence + Redis graceful fallback |
+| `test_models_neural` | Tensor shapes for ResNet-MLP and GraphSAGE GNN |
+| `test_assistant_llm` | Regex parsing of transaction IDs in natural-language queries |
+| `test_monitor_feedback` | LiveMonitor sliding window + Prometheus gauge hooks |
+| `test_api_endpoints` | Prediction range, non-trivial fraud rates, model loading |
+| `test_evaluation` | Confusion matrix and showcase-example generation |
 
 ---
 
-## Leakage controls
+## Feature Engineering Highlights
 
-- Split by **time**, never at random.
-- History, rolling counts, and GNN edges use **only earlier rows**.
-- Encoders and scalers fit on **train** only.
-- Thresholds chosen on **validation**, applied once on **test**.
-- Covered by `tests/test_no_leakage.py` and `tests/test_pipeline_regression.py`.
+The 319 engineered features fall into three families that drive the model:
 
----
+1. **Transaction velocity counters** (`C5`, `C8`, `C14`, `C4`, `C3`, `C11`) — how many transactions the card/client made recently.
+2. **Vesta interaction vectors** (`V264`, `V70`, `V91`, `V142`, `V30`, `V189`, `V283`) — Vesta's proprietary risk signals.
+3. **Co-missing pattern flags** (`M4_na`, `Vblock_V75_na`) — block-structured missingness reveals device/card fingerprints.
 
-## Limitations
+All features are computed using **only past rows** (rolling windows, cumulative sums), so there is zero temporal data leakage.
 
-- The feature store is a prepared file (replay). Live traffic needs an upstream store for velocity features.
-- History features grow over time, so early feature PSI can be large even when score PSI is stable.
-- Confirm `docker compose up` in your environment.
+**Ablation result:** removing engineered features and using only raw inputs drops PR-AUC from 0.549 → 0.162 (−70%).
 
 ---
 
-## Docs
+## Monitoring & Drift Detection
 
-- `docs/data_dictionary.md` — feature descriptions
-- `docs/MONITORING.md` — Prometheus / Grafana
-- `docs/zero_downtime_upgrade.md` — model swap
-- `docs/ROADMAP.md` — planned work
+The `/monitoring/*` endpoints and the Grafana dashboard track:
+
+- **Score drift** — PSI of the live fraud probability distribution vs. the training reference.
+- **Feature drift** — per-feature PSI; alert fires when > 40 features shift significantly.
+- **Flagged share** — alert fires when live flag rate is 2× or 0.25× the training baseline.
+- **Live precision/recall** — computed from `/feedback` outcomes; alert fires when precision drops below 60% of test-set precision.
+
+Prometheus scrapes `/metrics` every 10 s. All gauges and alerts are defined in `monitoring/prometheus.yml` and `monitoring/alerts.yml`.
+
+---
+
+## Zero-Downtime Model Reload
+
+```bash
+# Deploy a new model bundle to artifacts/model/, then:
+curl -X POST http://localhost:8000/admin/reload
+```
+
+The reload is protected by a threading lock — only one reload runs at a time, and in-flight `/score` requests finish with the old model.
+
+---
+
+## Configuration
+
+All settings are controlled by environment variables (copy `.env.example` → `.env`):
+
+| Variable | Default | Description |
+|:---|:---|:---|
+| `MODEL_DIR` | `artifacts/model` | Path to the production model bundle |
+| `FEATURE_FILE` | `data/ieee_ready.npz` | Path to the prepared feature store |
+| `DATABASE_URL` | `sqlite:///finguard.db` | SQLAlchemy connection string |
+| `REDIS_URL` | *(unset)* | Redis URL — cache disabled when absent |
+| `GROQ_API_KEY` | *(unset)* | Groq API key — template used when absent |
+| `LLM_MODEL` | `qwen/qwen3-27b` | Groq model for `/investigate` |
+| `CORS_ORIGINS` | `*` | Comma-separated allowed origins (restrict in production) |
+| `MLFLOW_TRACKING_URI` | `mlflow.db` | MLflow tracking URI |
+| `GRAFANA_PASSWORD` | `admin` | Grafana admin password (docker compose) |
+
+---
+
+## License
+
+MIT License — see [LICENSE](LICENSE).

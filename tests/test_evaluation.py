@@ -4,10 +4,12 @@ from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-from finguard import APPROVE, BLOCK, REVIEW
-from finguard.evaluation import decide_batch, pick_showcase, summary_counts
+from evaluation.metrics import APPROVE, BLOCK, REVIEW
+from evaluation.evaluation import decide_batch, pick_showcase, summary_counts
 
 
 def test_decide_batch_thresholds():

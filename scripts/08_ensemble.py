@@ -13,8 +13,9 @@ import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
-from finguard.metrics import no_model_cost, operating_points, report
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from evaluation.metrics import no_model_cost, operating_points, report
 
 data_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "data"
 art_dir = Path(sys.argv[2]) if len(sys.argv) > 2 else ROOT / "artifacts"

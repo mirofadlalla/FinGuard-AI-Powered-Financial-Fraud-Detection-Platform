@@ -1,11 +1,15 @@
-# Minimal dependencies to run the test suite in CI.
+# FinGuard — CI test suite dependencies
 # Heavy ML packages (torch, xgboost) are optional — tests that need them are
-# automatically skipped when the packages are absent (pytest.importorskip).
+# automatically skipped when the packages are absent (pytest.importorskip / pytest.skip).
+
 numpy
 pandas
 scikit-learn
 sqlalchemy
 pytest
 prometheus-client
-# Uncomment to also run the model-architecture tests (requires ~2 GB):
+httpx
+
+# Uncomment to also run the model-architecture and API endpoint tests:
+# xgboost
 # torch --index-url https://download.pytorch.org/whl/cpu

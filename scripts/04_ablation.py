@@ -14,8 +14,9 @@ from xgboost import XGBClassifier
 
 warnings.filterwarnings("ignore", message=".*mismatched devices.*")
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
-from finguard.metrics import report, precision_threshold
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from evaluation.metrics import report, precision_threshold
 
 data_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "data"
 (ROOT / "artifacts").mkdir(exist_ok=True)

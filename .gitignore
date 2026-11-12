@@ -1,6 +1,8 @@
 # ── Data ────────────────────────────────────────────────────────────────────
 data/*
 !data/.gitkeep
+!data/sample_train_row.json
+!data/sample_kaggle_test_row.json
 
 # ── Artifacts (models, checkpoints, reports) ────────────────────────────────
 artifacts/*
@@ -72,3 +74,8 @@ pgdata/
 .coverage
 htmlcov/
 coverage.xml
+
+# ── Generated reports / benchmark outputs ────────────────────────────────────
+# results.txt is committed as the canonical benchmark reference.
+# To regenerate it: python scripts/02_baselines.py > results.txt
+

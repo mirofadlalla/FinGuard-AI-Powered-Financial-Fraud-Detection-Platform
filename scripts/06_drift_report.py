@@ -15,9 +15,11 @@ import pandas as pd
 from sklearn.metrics import average_precision_score
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
-from finguard.drift import feature_psi, level, psi
-from finguard.serving import Model
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from monitoring.drift import feature_psi, level, psi
+from api.serving import Model
 
 data_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "data"
 model_dir = Path(sys.argv[2]) if len(sys.argv) > 2 else ROOT / "artifacts" / "model"

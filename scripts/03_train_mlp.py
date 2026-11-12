@@ -10,12 +10,13 @@ import pandas as pd
 import torch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
-from finguard.metrics import operating_points, report, summarize, no_model_cost
-from finguard.models import FraudMLP
-from finguard.losses import make_loss
-from finguard.torch_data import make_loader
-from finguard.trainer import fit, predict
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from evaluation.metrics import operating_points, report, summarize, no_model_cost
+from models.mlp import FraudMLP
+from models.losses import make_loss
+from models.torch_data import make_loader
+from models.trainer import fit, predict
 
 data_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "data"
 n_seeds = int(sys.argv[2]) if len(sys.argv) > 2 else 5

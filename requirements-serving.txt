@@ -1,14 +1,20 @@
+# FinGuard — serving image dependencies (CPU-only, no CUDA required)
+# Used by Dockerfile and docker compose.
+# Keep this list minimal: only what the FastAPI application needs at runtime.
+
 numpy
+pandas
 xgboost
 fastapi
-uvicorn
+uvicorn[standard]
 httpx
+python-multipart
 sqlalchemy
 redis
 psycopg2-binary
 prometheus-client
 groq
-python-multipart
+
 # CPU-only PyTorch — no CUDA driver needed in Docker
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch

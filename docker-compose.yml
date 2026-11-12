@@ -1,8 +1,10 @@
-# Start everything:  docker compose up --build
-# API docs:          http://localhost:8000/docs
-# MLflow UI:         http://localhost:5000
-# Prometheus:        http://localhost:9090
-# Grafana:           http://localhost:3000  (admin / admin)
+# FinGuard v2 — Full-stack docker compose
+#
+# Start:        docker compose up --build -d
+# API docs:     http://localhost:8000/docs
+# MLflow UI:    http://localhost:5000
+# Prometheus:   http://localhost:9090
+# Grafana:      http://localhost:3000  (admin / admin)
 
 services:
 
@@ -17,17 +19,23 @@ services:
       MLFLOW_TRACKING_URI:  http://mlflow:5000
       MODEL_DIR:            /models/model
       FEATURE_FILE:         /data/ieee_ready.npz
-      GROQ_API_KEY:         ${GROQ_API_KEY:-}   # optional — template used when empty
+      GROQ_API_KEY:         ${GROQ_API_KEY:-}        # optional: template used when empty
+      CORS_ORIGINS:         ${CORS_ORIGINS:-*}        # restrict in production
     volumes:
-      - ./artifacts/model:/models/model:ro       # production model (05_train_final.py)
-      - ./data:/data:ro
+      - ./artifacts/model:/models/model:ro            # bind-mount production model bundle
+      - ./data:/data:ro                               # bind-mount prepared feature store
     depends_on:
       postgres: { condition: service_healthy }
       redis:    { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     deploy:
       resources:
         limits:
-          memory: 2g    # torch cpu + xgboost need a bit more than 1 GB
+          memory: 2g    # XGBoost + PyTorch CPU need ~1.5 GB peak
 
   # ── PostgreSQL ────────────────────────────────────────────────────────────
   postgres:
@@ -45,7 +53,7 @@ services:
 
   # ── Redis ─────────────────────────────────────────────────────────────────
   redis:
-    image: redis:7
+    image: redis:7-alpine
     healthcheck:
       test:     ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -81,7 +89,7 @@ services:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.retention.time=7d"
     depends_on:
-      - api
+      api: { condition: service_healthy }
 
   # ── Grafana ───────────────────────────────────────────────────────────────
   grafana:
@@ -89,7 +97,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
     volumes:
       - grafana_data:/var/lib/grafana
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro

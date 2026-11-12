@@ -1,16 +1,39 @@
+# FinGuard — full development environment
+# For the production serving image, see requirements-serving.txt
+# For the CI test suite, see requirements-test.txt
+
+# ── Core ML ───────────────────────────────────────────────────────────────────
 numpy
 pandas
 scikit-learn
 xgboost
+
+# ── Experiment tracking ───────────────────────────────────────────────────────
 mlflow
+
+# ── Visualisation ─────────────────────────────────────────────────────────────
 matplotlib
+
+# ── API ───────────────────────────────────────────────────────────────────────
 fastapi
-uvicorn
+uvicorn[standard]
 httpx
+python-multipart
+
+# ── Persistence & caching ─────────────────────────────────────────────────────
 sqlalchemy
 redis
 psycopg2-binary
+
+# ── Monitoring ────────────────────────────────────────────────────────────────
 prometheus-client
+
+# ── LLM assistant (optional) ──────────────────────────────────────────────────
 groq
-# PyTorch with GPU (NVIDIA): pip install torch --index-url https://download.pytorch.org/whl/cu121
+
+# ── MLOps orchestration ───────────────────────────────────────────────────────
+zenml
+
+# ── Deep learning (CPU default; for GPU see the comment below) ────────────────
+# GPU (NVIDIA CUDA 12.1): pip install torch --index-url https://download.pytorch.org/whl/cu121
 torch
