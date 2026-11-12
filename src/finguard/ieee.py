@@ -389,4 +389,8 @@ def prepare(data_dir, train_frac=0.70, val_frac=0.15):
         out[f"id_{name}"] = part["TransactionID"].values.astype("int64")    # needed later by the API
         out[f"y_{name}"] = part["isFraud"].values.astype("int8")
         out[f"amount_{name}"] = part["TransactionAmt"].values.astype("float32")   # for the cost metric
+    # Return the fitted preprocessor so callers can persist it alongside the arrays.
+    # Saving it here (from the actual fit) is the only way to recover the real mean/std
+    # and freq_maps for correct serving via /predict/raw.
+    out["_prep"] = prep
     return out

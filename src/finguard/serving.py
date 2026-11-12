@@ -1,49 +1,13 @@
-"""Everything the API needs: the model, the feature store and readable explanations."""
+"""Trained XGBoost model + replay feature store used by the API."""
 import json
-import re
 from pathlib import Path
+
 import numpy as np
 import xgboost as xgb
 
+from finguard.explain import describe
+
 APPROVE, REVIEW, BLOCK = "APPROVE", "FRAUD_REVIEW", "FRAUD_BLOCK"
-
-
-def describe(name):
-    """Turn a feature name into a sentence a fraud analyst can read."""
-    if name.endswith("_freq"):
-        return f"how common the value of {name[:-5]} is"
-    if name.startswith("Vblock_"):
-        return "a group of Vesta signals is missing for this transaction"
-    if name.endswith("_na"):
-        return f"{name[:-3]} is missing"
-    if "_agg_" in name:
-        who = "this client" if name.startswith("uid") else "this card/address"
-        kind = "average" if name.endswith("_mean") else "variation"
-        col = name.split("_agg_")[1].rsplit("_", 1)[0]
-        return f"{kind} of {col} in the past activity of {who}"
-    if name.startswith("combo_"):
-        return "recent activity of this card + address + email combination (" + name.split("_count_")[1] + ")"
-    if name.startswith(("uid_count", "card_count", "card1_count")):
-        return "how many transactions this client/card made recently"
-    if name.endswith("secs_since_last"):
-        return "time since the previous transaction of this client"
-    if name.endswith("amt_vs_mean"):
-        return "amount compared with what this client usually spends"
-    if name.startswith("Dn_"):
-        return f"client age signal ({name[3:]} normalized)"
-    if re.fullmatch(r"C\d+", name):
-        return f"{name}: card-linkage count from Vesta (how the card connects to addresses, emails, devices)"
-    if re.fullmatch(r"D\d+", name):
-        return f"{name}: time since an earlier event of this client (Vesta)"
-    if re.fullmatch(r"M\d+", name):
-        return f"{name}: match check between card and billing details"
-    if re.fullmatch(r"V\d+", name):
-        return f"{name}: Vesta engineered risk signal"
-    if name.startswith("na_count"):
-        return "how many fields are missing for this transaction"
-    if name == "TransactionAmt":
-        return "transaction amount"
-    return name
 
 
 class Model:
@@ -54,7 +18,7 @@ class Model:
         self.meta = json.loads((model_dir / "meta.json").read_text())
         self.booster = xgb.Booster()
         self.booster.load_model(str(model_dir / "model.ubj"))
-        self.booster.set_param({"device": "cpu"})          # the API runs on CPU
+        self.booster.set_param({"device": "cpu"})
         self.feature_names = self.meta["feature_names"]
         self.version = self.meta["version"]
         self.review_thr = self.meta["thresholds"]["review"]
@@ -72,36 +36,66 @@ class Model:
         return APPROVE
 
     def explain(self, x, top_n=5):
-        """Top factors for ONE row. Uses TreeSHAP built into XGBoost (exact SHAP values).
-        SHAP values are in log-odds: positive = pushes towards fraud, negative = towards legit."""
+        """Top TreeSHAP factors for one row. Positive SHAP = pushes towards fraud."""
         x = np.asarray(x, dtype="float32").reshape(1, -1)
         contrib = self.booster.predict(xgb.DMatrix(x, missing=np.nan), pred_contribs=True)[0][:-1]
         factors = []
         for i in np.argsort(-np.abs(contrib))[:top_n]:
             name = self.feature_names[i]
-            factors.append({"feature": name, "description": describe(name),
-                            "shap": round(float(contrib[i]), 4),
-                            "effect": "raises risk" if contrib[i] > 0 else "lowers risk",
-                            "value_z": None if np.isnan(x[0, i]) else round(float(x[0, i]), 2)})
+            factors.append({
+                "feature": name,
+                "description": describe(name),
+                "shap": round(float(contrib[i]), 4),
+                "effect": "raises risk" if contrib[i] > 0 else "lowers risk",
+                "value_z": None if np.isnan(x[0, i]) else round(float(x[0, i]), 2),
+            })
         return factors
 
 
 class FeatureStore:
-    """Where the API finds the features of a transaction.
+    """Lookup of precomputed feature vectors by TransactionID (file replay + live puts).
 
-    Here it is a file with the prepared test transactions (replay mode).
-    In a real system these features would be computed upstream and read from a feature store.
+    In production these vectors would come from an upstream feature store.
     """
 
-    def __init__(self, path, split="test"):
-        # mmap_mode='r' avoids loading the full file into RAM at startup; arrays are paged in on demand.
+    def __init__(self, path, split="all"):
         d = np.load(path, allow_pickle=True, mmap_mode="r")
-        self.X = d[f"X_{split}"]
-        self.index = {int(t): i for i, t in enumerate(d[f"id_{split}"])}
+        splits = ["train", "val", "test"] if split == "all" else [split]
+        self._parts = []
+        self.index = {}
+        for s in splits:
+            x_key, id_key = f"X_{s}", f"id_{s}"
+            if x_key not in d.files or id_key not in d.files:
+                continue
+            part_i = len(self._parts)
+            self._parts.append(d[x_key])
+            for i, t in enumerate(d[id_key]):
+                self.index[int(t)] = (part_i, i)
+        self.X = self._parts[0] if self._parts else None
+        self._live: dict[int, np.ndarray] = {}
 
     def __len__(self):
-        return len(self.index)
+        return len(self.index) + sum(1 for k in self._live if k not in self.index)
 
     def get(self, txn_id):
-        i = self.index.get(int(txn_id))
-        return None if i is None else self.X[i]
+        tid = int(txn_id)
+        live = self._live.get(tid)
+        if live is not None:
+            return live
+        loc = self.index.get(tid)
+        if loc is None:
+            return None
+        part_i, i = loc
+        return self._parts[part_i][i]
+
+    def put(self, txn_id, x, overwrite_prepared=False):
+        """Keep a scored vector so /score/{id} works after /predict/raw.
+
+        Prepared train/val/test vectors are not overwritten unless asked — those
+        include history that a single raw JSON row cannot reconstruct.
+        """
+        tid = int(txn_id)
+        if not overwrite_prepared and tid in self.index and tid not in self._live:
+            return False
+        self._live[tid] = np.asarray(x, dtype="float32").reshape(-1).copy()
+        return True

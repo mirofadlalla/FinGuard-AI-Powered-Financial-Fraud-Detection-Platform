@@ -117,6 +117,23 @@ with mlflow.start_run() as run:
     (bundle / "meta.json").write_text(json.dumps(meta, indent=2))
     (bundle / "reference.json").write_text(json.dumps(make_reference(X_tr, names, scores=p_val)))
     shap_global.to_csv(bundle / "shap_global.csv", index=False)
+    # Save the preprocessor so the API can accept raw IEEE-CIS transactions.
+    # Load from data/preprocessor.pkl (written by 01_prepare_data.py) so we get the
+    # real fitted mean/std and freq_maps rather than the hollow shell that
+    # save_preprocessor.py used to build by inferring from ieee_ready.npz.
+    import pickle
+    _prep_src = data_dir / "preprocessor.pkl"
+    if not _prep_src.exists():
+        raise FileNotFoundError(
+            f"{_prep_src} not found.  Run  python scripts/01_prepare_data.py  first "
+            "so the fitted Preprocessor (with real mean/std and freq_maps) is available."
+        )
+    with open(_prep_src, "rb") as _f:
+        prep = pickle.load(_f)
+    with open(bundle / "preprocessor.pkl", "wb") as _f:
+        pickle.dump(prep, _f, protocol=4)
+    print(f"Saved preprocessor → preprocessor.pkl  (freq_maps: {len(prep.freq_maps)}, "
+          f"num_cols: {len(prep.num_cols)})")
     try:
         import matplotlib
         matplotlib.use("Agg")

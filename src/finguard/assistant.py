@@ -24,7 +24,7 @@ def find_transaction_id(question):
 
 
 def value_phrase(factor):
-    """Say in words how unusual the value is (z = distance from the typical value, in standard deviations)."""
+    """Turn a z-score into a short phrase (very high / high / typical / low / missing)."""
     z = factor["value_z"]
     if z is None:
         return "missing"

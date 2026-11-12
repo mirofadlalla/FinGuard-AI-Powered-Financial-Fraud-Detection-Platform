@@ -14,19 +14,25 @@ from prometheus_client import Counter, Gauge, Histogram
 
 from finguard.drift import feature_psi, level, psi
 
-# ---------- system ----------
+#  system ----------
 REQUESTS = Counter("finguard_requests_total", "HTTP requests", ["endpoint", "method", "status"])
+
 LATENCY = Histogram("finguard_request_latency_seconds", "Request latency", ["endpoint"],
                     buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10))
+
 CACHE = Counter("finguard_cache_total", "Redis cache lookups", ["result"])             # hit / miss
 ASSISTANT = Counter("finguard_assistant_total", "Assistant answers", ["source"])       # llm / template
 
 # ---------- model ----------
 DECISIONS = Counter("finguard_decisions_total", "Decisions taken", ["decision"])
+
 SCORES = Histogram("finguard_fraud_score", "Fraud probability of scored transactions",
                    buckets=(0.01, 0.02, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.99, 1.0))
+
 MODEL_INFO = Gauge("finguard_model_info", "Model version that is loaded (value is always 1)", ["version"])
+
 BASELINE = Gauge("finguard_baseline", "What the model achieved on the test set when it was trained", ["metric"])
+
 FLAGGED_RECENT = Gauge("finguard_flagged_share_recent", "Share of flagged transactions in the live window")
 
 # ---------- data drift ----------

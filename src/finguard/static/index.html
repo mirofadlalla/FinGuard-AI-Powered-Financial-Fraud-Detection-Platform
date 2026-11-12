@@ -1,0 +1,850 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FinGuard v2 — Fraud Detection Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    /* custom scrollbar */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #1e293b; }
+    ::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+
+    /* gauge arc */
+    .gauge-wrap { position: relative; display: inline-block; }
+    .gauge-wrap canvas { display: block; }
+    .gauge-label {
+      position: absolute; top: 58%; left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 1.75rem; font-weight: 700;
+    }
+
+    /* fade-in */
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; } }
+    .fade-in { animation: fadeIn 0.3s ease; }
+
+    /* spinner */
+    .spinner {
+      display: inline-block; width: 18px; height: 18px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: white; border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* nav active */
+    .nav-btn.active { background: #3b82f6; color: #fff; }
+
+    /* decision badge */
+    .badge-approve  { background: #064e3b; color: #34d399; border: 1px solid #34d399; }
+    .badge-review   { background: #451a03; color: #fbbf24; border: 1px solid #fbbf24; }
+    .badge-block    { background: #450a0a; color: #f87171; border: 1px solid #f87171; }
+    .badge-unknown  { background: #1e293b; color: #94a3b8; border: 1px solid #475569; }
+
+    /* shap bar */
+    .shap-bar { height: 8px; border-radius: 4px; transition: width 0.6s ease; }
+
+    /* panel card */
+    .panel { background: #1e293b; border-radius: 12px; }
+    .stat-card { background: #0f172a; border-radius: 10px; }
+
+    /* tab content */
+    .tab-pane { display: none; }
+    .tab-pane.active { display: block; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-200 font-sans min-h-screen flex">
+
+<!-- ═══════════════════ SIDEBAR ═══════════════════ -->
+<nav class="w-56 flex-shrink-0 bg-slate-900 border-r border-slate-800 flex flex-col p-4 gap-2">
+  <div class="mb-6">
+    <div class="flex items-center gap-2 mb-1">
+      <div class="w-7 h-7 rounded-lg bg-blue-600 flex items-center justify-center text-xs font-bold">FG</div>
+      <span class="font-bold text-white text-lg">FinGuard</span>
+    </div>
+    <div class="text-xs text-slate-500 pl-9">v2 · IEEE-CIS</div>
+  </div>
+
+  <button onclick="showTab('score')"    class="nav-btn active text-left px-3 py-2 rounded-lg text-sm font-medium transition hover:bg-slate-700">🔍 Score Transaction</button>
+  <button onclick="showTab('predict')"  class="nav-btn text-left px-3 py-2 rounded-lg text-sm font-medium transition hover:bg-slate-700">⚡ Raw Predict</button>
+  <button onclick="showTab('rawieee')"  class="nav-btn text-left px-3 py-2 rounded-lg text-sm font-medium transition hover:bg-slate-700">📋 Raw IEEE-CIS</button>
+  <button onclick="showTab('investigate')" class="nav-btn text-left px-3 py-2 rounded-lg text-sm font-medium transition hover:bg-slate-700">💬 Investigate</button>
+  <button onclick="showTab('feedback')" class="nav-btn text-left px-3 py-2 rounded-lg text-sm font-medium transition hover:bg-slate-700">✅ Feedback</button>
+  <button onclick="showTab('monitor')"  class="nav-btn text-left px-3 py-2 rounded-lg text-sm font-medium transition hover:bg-slate-700">📊 Monitoring</button>
+
+  <div class="flex-1"></div>
+
+  <!-- Health indicator -->
+  <div id="health-pill" class="text-xs rounded-lg px-3 py-2 bg-slate-800 text-slate-400 flex items-center gap-2">
+    <div id="health-dot" class="w-2 h-2 rounded-full bg-slate-600"></div>
+    <span id="health-text">checking…</span>
+  </div>
+  <div id="model-ver" class="text-xs text-slate-600 pl-1"></div>
+</nav>
+
+<!-- ═══════════════════ MAIN ═══════════════════ -->
+<main class="flex-1 overflow-y-auto p-6">
+
+<!-- ── Score by ID ── -->
+<div id="tab-score" class="tab-pane active fade-in">
+  <h1 class="text-xl font-bold mb-1">Score Transaction</h1>
+  <p class="text-sm text-slate-400 mb-5">Look up a transaction from the feature store and run it through the model.</p>
+
+  <div class="panel p-5 max-w-lg mb-6">
+    <label class="text-sm text-slate-400 block mb-2">Transaction ID</label>
+    <div class="flex gap-3">
+      <input id="score-id" type="number" placeholder="e.g. 3513782"
+        class="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+        onkeydown="if(event.key==='Enter') runScore()"/>
+      <button onclick="runScore()" id="score-btn"
+        class="bg-blue-600 hover:bg-blue-500 text-white px-5 py-2 rounded-lg font-medium text-sm transition flex items-center gap-2">
+        Score
+      </button>
+    </div>
+    <div id="score-err" class="text-red-400 text-xs mt-2 hidden"></div>
+  </div>
+
+  <div id="score-result" class="hidden fade-in max-w-2xl">
+    <!-- Decision header -->
+    <div class="panel p-5 mb-4 flex items-center gap-6">
+      <div class="gauge-wrap">
+        <canvas id="gauge-canvas" width="140" height="90"></canvas>
+        <div class="gauge-label text-white" id="gauge-pct">-</div>
+      </div>
+      <div class="flex-1">
+        <div class="text-xs text-slate-400 mb-1">Transaction</div>
+        <div class="text-2xl font-bold text-white mb-2" id="res-txn">-</div>
+        <div id="res-badge" class="inline-block px-3 py-1 rounded-full text-sm font-semibold mb-2">-</div>
+        <div class="text-xs text-slate-500" id="res-meta"></div>
+      </div>
+    </div>
+
+    <!-- SHAP factors -->
+    <div id="shap-panel" class="panel p-5 hidden">
+      <div class="text-sm font-semibold mb-3 text-slate-300">Top fraud signals (SHAP)</div>
+      <div id="shap-bars"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Raw Predict ── -->
+<div id="tab-predict" class="tab-pane fade-in">
+  <h1 class="text-xl font-bold mb-1">Raw Predict</h1>
+  <p class="text-sm text-slate-400 mb-1">POST a JSON feature dict directly (not persisted to the database).</p>
+  <div class="mb-5 text-xs rounded-lg px-3 py-2 bg-amber-950 border border-amber-700 text-amber-300 max-w-2xl">
+    ⚠️ <strong>This tab expects pre-processed (z-scored) features</strong>, not raw transaction values.
+    Feature values must already be signed-log-transformed and z-scored to match the model's training distribution.
+    To score a raw transaction in original IEEE-CIS format (TransactionAmt in $, card4="visa", M1="T", etc.),
+    use the <button class="underline font-medium" onclick="showTab('rawieee')">📋 Raw IEEE-CIS</button> tab instead.
+  </div>
+
+  <div class="panel p-5 max-w-2xl mb-6">
+    <label class="text-sm text-slate-400 block mb-2">Feature JSON <span class="text-slate-600">(z-scored values — missing ones become NaN)</span></label>
+    <textarea id="predict-json" rows="8"
+      class="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 text-sm font-mono text-slate-200 placeholder-slate-600 focus:outline-none focus:border-blue-500 resize-y"
+      placeholder='{"TransactionAmt": 1.52, "C1": 0.0, "V1": -0.3}  ← z-scored values, NOT raw $'></textarea>
+    <div class="flex justify-between items-center mt-3">
+      <div id="predict-err" class="text-red-400 text-xs"></div>
+      <button onclick="runPredict()" id="predict-btn"
+        class="bg-blue-600 hover:bg-blue-500 text-white px-5 py-2 rounded-lg font-medium text-sm transition flex items-center gap-2">
+        Predict
+      </button>
+    </div>
+  </div>
+
+  <div id="predict-result" class="hidden fade-in panel p-5 max-w-2xl">
+    <div class="flex items-center gap-4 mb-4">
+      <div>
+        <div class="text-xs text-slate-400 mb-1">Fraud probability</div>
+        <div id="pred-prob" class="text-3xl font-bold text-white">-</div>
+      </div>
+      <div id="pred-badge" class="ml-auto px-4 py-2 rounded-full text-base font-semibold">-</div>
+    </div>
+    <div id="pred-shap" class="hidden">
+      <div class="text-sm font-semibold mb-3 text-slate-300">Top fraud signals (SHAP)</div>
+      <div id="pred-shap-bars"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Raw IEEE-CIS ── -->
+<div id="tab-rawieee" class="tab-pane fade-in">
+  <h1 class="text-xl font-bold mb-1">Raw IEEE-CIS Predict</h1>
+  <p class="text-sm text-slate-400 mb-5">Paste a raw IEEE-CIS transaction JSON — the server auto-preprocesses it (log-transform, freq-encoding, z-score). If <span class="font-mono">TransactionID</span> is in the prepared <span class="font-mono">train_transaction.csv</span> splits, the full history vector is used. Official Kaggle <span class="font-mono">test.csv</span> IDs (3663549+) are not in that file and will look like a brand-new client.</p>
+
+  <div class="panel p-5 max-w-3xl mb-4">
+    <div class="flex items-center justify-between mb-2">
+      <label class="text-sm text-slate-400">Transaction JSON <span class="text-slate-600">(raw IEEE-CIS format — TransactionAmt in $, card4="visa", M1="T", etc.)</span></label>
+      <button onclick="loadRawIEEESample()" class="text-xs text-blue-400 hover:text-blue-300 transition">Load sample</button>
+    </div>
+    <textarea id="rawieee-json" rows="10"
+      class="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 text-xs font-mono text-slate-200 placeholder-slate-600 focus:outline-none focus:border-blue-500 resize-y"
+      placeholder='{"TransactionAmt": 31.95, "ProductCD": "W", "card4": "visa", "M1": "T", "C1": 6.0, ...}'></textarea>
+    <div class="flex justify-between items-center mt-3">
+      <div id="rawieee-err" class="text-red-400 text-xs"></div>
+      <button onclick="runRawIEEE()" id="rawieee-btn"
+        class="bg-blue-600 hover:bg-blue-500 text-white px-5 py-2 rounded-lg font-medium text-sm transition flex items-center gap-2">
+        Predict
+      </button>
+    </div>
+  </div>
+
+  <div id="rawieee-result" class="hidden fade-in panel p-5 max-w-3xl">
+    <div class="flex items-center gap-4 mb-3">
+      <div>
+        <div class="text-xs text-slate-400 mb-1">Fraud probability</div>
+        <div id="rawieee-prob" class="text-3xl font-bold text-white">-</div>
+        <div id="rawieee-prob-detail" class="text-xs text-slate-400 mt-1"></div>
+      </div>
+      <div id="rawieee-badge" class="ml-auto px-4 py-2 rounded-full text-base font-semibold">-</div>
+    </div>
+    <div id="rawieee-saved" class="text-xs text-slate-400 mb-2"></div>
+    <div id="rawieee-coverage" class="text-xs text-slate-500 mb-3"></div>
+    <!-- Degraded-score warning: shown when velocity/history features are absent -->
+    <div id="rawieee-warn" class="hidden mb-3 p-3 rounded-lg bg-yellow-900/40 border border-yellow-600/50 text-yellow-300 text-xs leading-relaxed">
+      <span class="font-semibold">Score quality: DEGRADED</span> —
+      <span id="rawieee-warn-text"></span>
+      Fraud recall drops from ~63.7% to ~33.9% without velocity features.
+      Use <span class="font-mono">/score/{txn_id}</span> for a fully-featured score.
+    </div>
+    <div id="rawieee-shap" class="hidden">
+      <div class="text-sm font-semibold mb-3 text-slate-300">Top fraud signals (SHAP)</div>
+      <div id="rawieee-shap-bars"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Investigate ── -->
+<div id="tab-investigate" class="tab-pane fade-in">
+  <h1 class="text-xl font-bold mb-1">Investigate</h1>
+  <p class="text-sm text-slate-400 mb-5">Ask in plain English — the assistant uses SHAP + LLM to explain the decision.</p>
+
+  <div class="panel p-5 max-w-2xl mb-6">
+    <label class="text-sm text-slate-400 block mb-2">Question</label>
+    <input id="inv-q" type="text" placeholder="Why was transaction 3487632 flagged?"
+      class="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 mb-3"
+      onkeydown="if(event.key==='Enter') runInvestigate()"/>
+    <div class="flex justify-between items-center">
+      <div id="inv-err" class="text-red-400 text-xs"></div>
+      <button onclick="runInvestigate()" id="inv-btn"
+        class="bg-blue-600 hover:bg-blue-500 text-white px-5 py-2 rounded-lg font-medium text-sm transition flex items-center gap-2">
+        Ask
+      </button>
+    </div>
+  </div>
+
+  <div id="inv-result" class="hidden fade-in panel p-5 max-w-2xl">
+    <div class="text-xs text-slate-500 mb-2">Transaction <span id="inv-txn" class="font-mono text-slate-300"></span></div>
+    <div id="inv-answer" class="text-slate-200 leading-relaxed whitespace-pre-wrap"></div>
+  </div>
+</div>
+
+<!-- ── Feedback ── -->
+<div id="tab-feedback" class="tab-pane fade-in">
+  <h1 class="text-xl font-bold mb-1">Submit Feedback</h1>
+  <p class="text-sm text-slate-400 mb-5">Record the real outcome of a scored transaction (chargebacks, manual review results). Used to compute live precision / recall.</p>
+
+  <div class="panel p-5 max-w-sm mb-6">
+    <label class="text-sm text-slate-400 block mb-2">Transaction ID</label>
+    <input id="fb-id" type="number" placeholder="e.g. 3487632"
+      class="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 mb-4"/>
+
+    <label class="text-sm text-slate-400 block mb-2">Outcome</label>
+    <div class="flex gap-3 mb-5">
+      <label class="flex items-center gap-2 cursor-pointer">
+        <input type="radio" name="fb-outcome" value="true" class="accent-red-500"/> <span class="text-sm text-red-400 font-medium">Confirmed fraud</span>
+      </label>
+      <label class="flex items-center gap-2 cursor-pointer">
+        <input type="radio" name="fb-outcome" value="false" checked class="accent-green-500"/> <span class="text-sm text-green-400 font-medium">Legitimate</span>
+      </label>
+    </div>
+
+    <div class="flex justify-between items-center">
+      <div id="fb-err" class="text-red-400 text-xs"></div>
+      <button onclick="runFeedback()" id="fb-btn"
+        class="bg-blue-600 hover:bg-blue-500 text-white px-5 py-2 rounded-lg font-medium text-sm transition flex items-center gap-2">
+        Submit
+      </button>
+    </div>
+  </div>
+
+  <div id="fb-ok" class="hidden fade-in panel p-4 max-w-sm border border-green-800 text-green-400 text-sm flex items-center gap-2">
+    ✓ Feedback recorded — live precision/recall will update on the next /monitoring/performance poll.
+  </div>
+</div>
+
+<!-- ── Monitor ── -->
+<div id="tab-monitor" class="tab-pane fade-in">
+  <div class="flex items-center justify-between mb-5">
+    <div>
+      <h1 class="text-xl font-bold mb-1">Monitoring</h1>
+      <p class="text-sm text-slate-400">Auto-refreshes every 15 s. Last update: <span id="mon-ts" class="text-slate-300 font-mono text-xs">—</span></p>
+    </div>
+    <button onclick="loadMonitor()" class="bg-slate-700 hover:bg-slate-600 text-sm text-white px-4 py-2 rounded-lg transition">↻ Refresh now</button>
+  </div>
+
+  <!-- Summary stats row -->
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+    <div class="stat-card p-4">
+      <div class="text-xs text-slate-500 mb-1">Total scored (last 1k)</div>
+      <div id="mon-total" class="text-2xl font-bold text-white">—</div>
+    </div>
+    <div class="stat-card p-4">
+      <div class="text-xs text-slate-500 mb-1">Mean fraud score</div>
+      <div id="mon-mean" class="text-2xl font-bold text-white">—</div>
+    </div>
+    <div class="stat-card p-4">
+      <div class="text-xs text-slate-500 mb-1">Score PSI</div>
+      <div id="mon-psi" class="text-2xl font-bold text-white">—</div>
+    </div>
+    <div class="stat-card p-4">
+      <div class="text-xs text-slate-500 mb-1">Features drifting</div>
+      <div id="mon-drift-feats" class="text-2xl font-bold text-white">—</div>
+    </div>
+  </div>
+
+  <!-- Decision breakdown + precision/recall -->
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+    <!-- Decision doughnut -->
+    <div class="panel p-5">
+      <div class="text-sm font-semibold mb-4 text-slate-300">Decision breakdown</div>
+      <div class="flex items-center gap-6">
+        <div style="width:160px;height:160px;position:relative">
+          <canvas id="decision-chart"></canvas>
+        </div>
+        <div id="decision-legend" class="space-y-2 text-sm"></div>
+      </div>
+    </div>
+
+    <!-- Precision / Recall -->
+    <div class="panel p-5">
+      <div class="text-sm font-semibold mb-4 text-slate-300">Live quality (from feedback)</div>
+      <div class="space-y-4">
+        <div>
+          <div class="flex justify-between text-xs text-slate-400 mb-1">
+            <span>Precision</span><span id="mon-prec">—</span>
+          </div>
+          <div class="bg-slate-700 rounded-full h-2">
+            <div id="mon-prec-bar" class="bg-green-500 h-2 rounded-full" style="width:0%"></div>
+          </div>
+        </div>
+        <div>
+          <div class="flex justify-between text-xs text-slate-400 mb-1">
+            <span>Recall</span><span id="mon-rec">—</span>
+          </div>
+          <div class="bg-slate-700 rounded-full h-2">
+            <div id="mon-rec-bar" class="bg-blue-500 h-2 rounded-full" style="width:0%"></div>
+          </div>
+        </div>
+        <div class="text-xs text-slate-500">
+          Labeled: <span id="mon-labeled">—</span> transactions with known outcome
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Top drifted features -->
+  <div class="panel p-5 mb-6">
+    <div class="text-sm font-semibold mb-4 text-slate-300">Top drifted features (PSI)</div>
+    <div id="drift-features" class="space-y-2 text-sm text-slate-400">Loading…</div>
+  </div>
+
+  <!-- Score dist chart -->
+  <div class="panel p-5">
+    <div class="text-sm font-semibold mb-4 text-slate-300">Recent fraud score distribution</div>
+    <canvas id="score-dist-chart" height="80"></canvas>
+  </div>
+</div>
+
+</main><!-- /main -->
+
+<!-- ═══════════════════ SCRIPTS ═══════════════════ -->
+<script>
+/* ── Utility ───────────────────────────────────── */
+const API = '';   // same origin
+
+function busy(btnId, on) {
+  const b = document.getElementById(btnId);
+  if (!b) return;
+  b.disabled = on;
+  if (on) {
+    b._orig = b.innerHTML;
+    b.innerHTML = '<span class="spinner"></span>';
+  } else {
+    b.innerHTML = b._orig || b.innerHTML;
+  }
+}
+
+function decisionClass(d) {
+  if (!d) return 'badge-unknown';
+  d = d.toUpperCase();
+  if (d === 'APPROVE') return 'badge-approve';
+  if (d.includes('REVIEW')) return 'badge-review';
+  if (d.includes('BLOCK')) return 'badge-block';
+  return 'badge-unknown';
+}
+
+function decisionLabel(d) {
+  if (!d) return '—';
+  d = d.toUpperCase();
+  if (d === 'APPROVE') return '✓ APPROVE';
+  if (d.includes('REVIEW')) return '⚠ FRAUD REVIEW';
+  if (d.includes('BLOCK')) return '✗ FRAUD BLOCK';
+  return d;
+}
+
+function formatFraudPct(p) {
+  const pct = (Number(p) || 0) * 100;
+  if (pct < 1) return pct.toFixed(2) + '%';
+  if (pct < 10) return pct.toFixed(2) + '%';
+  return pct.toFixed(1) + '%';
+}
+
+function thresholdHint(r) {
+  const review = r.review_threshold != null ? (r.review_threshold * 100).toFixed(2) : '1.00';
+  const block  = r.block_threshold  != null ? (r.block_threshold  * 100).toFixed(1)  : '22.5';
+  const p = Number(r.fraud_prob) || 0;
+  return `probability ${p.toFixed(4)}  ·  ${formatFraudPct(p)} is less than 1% if you see 0.99%  ·  REVIEW ≥ ${review}%  ·  BLOCK ≥ ${block}%`;
+}
+
+async function apiFetch(path, opts = {}) {
+  const r = await fetch(API + path, {
+    headers: { 'Content-Type': 'application/json' },
+    ...opts,
+  });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({ detail: r.statusText }));
+    // Pydantic 422 errors return detail as an array of objects — format them readably
+    let msg;
+    if (Array.isArray(err.detail)) {
+      msg = err.detail
+        .map(e => {
+          const field = e.loc ? e.loc.slice(-1)[0] : '';
+          return field ? `${field}: ${e.msg}` : e.msg;
+        })
+        .join('; ');
+    } else {
+      msg = err.detail || r.statusText;
+    }
+    throw new Error(msg);
+  }
+  return r.json();
+}
+
+/* ── Tab navigation ────────────────────────────── */
+function showTab(name) {
+  document.querySelectorAll('.tab-pane').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(el => el.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  event.currentTarget.classList.add('active');
+  if (name === 'monitor') loadMonitor();
+}
+
+/* ── Health poll ───────────────────────────────── */
+async function checkHealth() {
+  try {
+    const h = await apiFetch('/health');
+    document.getElementById('health-dot').className = 'w-2 h-2 rounded-full bg-green-500';
+    document.getElementById('health-text').textContent = 'API healthy';
+    document.getElementById('model-ver').textContent = 'model ' + (h.model_version || '');
+  } catch {
+    document.getElementById('health-dot').className = 'w-2 h-2 rounded-full bg-red-500';
+    document.getElementById('health-text').textContent = 'API unreachable';
+  }
+}
+
+/* ── Gauge (semi-circle) ───────────────────────── */
+let gaugeChart = null;
+function drawGauge(prob) {
+  const canvas = document.getElementById('gauge-canvas');
+  const ctx = canvas.getContext('2d');
+  if (gaugeChart) gaugeChart.destroy();
+
+  const p = Math.max(0, Math.min(1, prob));
+  const color = p < 0.4 ? '#34d399' : p < 0.7 ? '#fbbf24' : '#f87171';
+
+  gaugeChart = new Chart(ctx, {
+    type: 'doughnut',
+    data: {
+      datasets: [{
+        data: [p, 1 - p, 1],   // filled, empty, invisible half
+        backgroundColor: [color, '#1e293b', 'transparent'],
+        borderWidth: 0,
+        circumference: 180,
+        rotation: 270,
+      }]
+    },
+    options: {
+      responsive: false,
+      cutout: '70%',
+      plugins: { legend: { display: false }, tooltip: { enabled: false } },
+      animation: { duration: 600 },
+    }
+  });
+  document.getElementById('gauge-pct').textContent = Math.round(p * 100) + '%';
+  document.getElementById('gauge-pct').style.color = color;
+}
+
+/* ── SHAP bars ─────────────────────────────────── */
+function renderShap(factors, containerId) {
+  const el = document.getElementById(containerId);
+  if (!factors || factors.length === 0) { el.innerHTML = ''; return; }
+  const max = Math.max(...factors.map(f => Math.abs(f.shap)));
+  el.innerHTML = factors.slice(0, 10).map(f => {
+    const pct = Math.round((Math.abs(f.shap) / max) * 100);
+    const color = f.shap > 0 ? '#f87171' : '#34d399';
+    const sign = f.shap > 0 ? '+' : '';
+    return `<div class="mb-2">
+      <div class="flex justify-between text-xs text-slate-400 mb-1">
+        <span class="font-mono truncate max-w-xs">${f.feature}</span>
+        <span style="color:${color}">${sign}${f.shap.toFixed(3)}</span>
+      </div>
+      <div class="bg-slate-700 rounded h-1.5">
+        <div class="shap-bar" style="width:${pct}%;background:${color}"></div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+/* ── Score by ID ───────────────────────────────── */
+async function runScore() {
+  const id = document.getElementById('score-id').value.trim();
+  const errEl = document.getElementById('score-err');
+  errEl.classList.add('hidden');
+  if (!id) { errEl.textContent = 'Enter a transaction ID.'; errEl.classList.remove('hidden'); return; }
+
+  busy('score-btn', true);
+  try {
+    const r = await apiFetch(`/score/${id}`);
+    document.getElementById('score-result').classList.remove('hidden');
+
+    // gauge
+    drawGauge(r.fraud_prob);
+
+    // header
+    document.getElementById('res-txn').textContent = '#' + r.txn_id;
+    const badge = document.getElementById('res-badge');
+    badge.className = 'inline-block px-3 py-1 rounded-full text-sm font-semibold mb-2 ' + decisionClass(r.decision);
+    badge.textContent = decisionLabel(r.decision);
+    document.getElementById('res-meta').textContent =
+      `model ${r.model_version}  ·  ${r.from_cache ? 'cached' : 'live'}`;
+
+    // SHAP
+    const shap = document.getElementById('shap-panel');
+    if (r.factors && r.factors.length > 0) {
+      shap.classList.remove('hidden');
+      renderShap(r.factors, 'shap-bars');
+    } else {
+      shap.classList.add('hidden');
+    }
+  } catch (e) {
+    errEl.textContent = e.message;
+    errEl.classList.remove('hidden');
+  } finally {
+    busy('score-btn', false);
+  }
+}
+
+/* ── Raw predict ───────────────────────────────── */
+async function runPredict() {
+  const raw = document.getElementById('predict-json').value.trim();
+  const errEl = document.getElementById('predict-err');
+  errEl.textContent = '';
+  let features;
+  try { features = JSON.parse(raw); } catch {
+    errEl.textContent = 'Invalid JSON.'; return;
+  }
+
+  busy('predict-btn', true);
+  try {
+    const r = await apiFetch('/predict', { method: 'POST', body: JSON.stringify({ features }) });
+    document.getElementById('predict-result').classList.remove('hidden');
+    document.getElementById('pred-prob').textContent = (r.fraud_prob * 100).toFixed(1) + '%';
+    const badge = document.getElementById('pred-badge');
+    badge.className = 'ml-auto px-4 py-2 rounded-full text-base font-semibold ' + decisionClass(r.decision);
+    badge.textContent = decisionLabel(r.decision);
+
+    const shapWrap = document.getElementById('pred-shap');
+    if (r.factors && r.factors.length > 0) {
+      shapWrap.classList.remove('hidden');
+      renderShap(r.factors, 'pred-shap-bars');
+    } else {
+      shapWrap.classList.add('hidden');
+    }
+  } catch (e) {
+    errEl.textContent = e.message;
+  } finally {
+    busy('predict-btn', false);
+  }
+}
+
+/* ── Investigate ───────────────────────────────── */
+async function runInvestigate() {
+  const q = document.getElementById('inv-q').value.trim();
+  const errEl = document.getElementById('inv-err');
+  errEl.textContent = '';
+  if (!q) { errEl.textContent = 'Enter a question.'; return; }
+
+  busy('inv-btn', true);
+  try {
+    const r = await apiFetch('/investigate', { method: 'POST', body: JSON.stringify({ question: q }) });
+    document.getElementById('inv-result').classList.remove('hidden');
+    document.getElementById('inv-txn').textContent = '#' + r.txn_id;
+    document.getElementById('inv-answer').textContent = r.answer;
+  } catch (e) {
+    errEl.textContent = e.message;
+  } finally {
+    busy('inv-btn', false);
+  }
+}
+
+/* ── Feedback ──────────────────────────────────── */
+async function runFeedback() {
+  const id = document.getElementById('fb-id').value.trim();
+  const errEl = document.getElementById('fb-err');
+  errEl.textContent = '';
+  if (!id) { errEl.textContent = 'Enter a transaction ID.'; return; }
+  const is_fraud = document.querySelector('input[name="fb-outcome"]:checked').value === 'true';
+
+  busy('fb-btn', true);
+  try {
+    await apiFetch('/feedback', { method: 'POST', body: JSON.stringify({ txn_id: parseInt(id), is_fraud }) });
+    document.getElementById('fb-ok').classList.remove('hidden');
+    document.getElementById('fb-id').value = '';
+    setTimeout(() => document.getElementById('fb-ok').classList.add('hidden'), 5000);
+  } catch (e) {
+    errEl.textContent = e.message;
+  } finally {
+    busy('fb-btn', false);
+  }
+}
+
+/* ── Monitoring ────────────────────────────────── */
+let decisionChartInst = null;
+let scoreDistChartInst = null;
+
+async function loadMonitor() {
+  document.getElementById('mon-ts').textContent = new Date().toLocaleTimeString();
+
+  // Fetch all three in parallel
+  const [summary, drift, perf] = await Promise.allSettled([
+    apiFetch('/monitoring/summary'),
+    apiFetch('/monitoring/drift'),
+    apiFetch('/monitoring/performance'),
+  ]);
+
+  /* ── summary ── */
+  if (summary.status === 'fulfilled') {
+    const s = summary.value;
+    document.getElementById('mon-total').textContent = s.total ?? '—';
+    document.getElementById('mon-mean').textContent =
+      s.mean_fraud_prob != null ? (s.mean_fraud_prob * 100).toFixed(1) + '%' : '—';
+
+    // Decision doughnut
+    const counts = s.decision_counts || {};
+    const labels = Object.keys(counts);
+    const data   = labels.map(k => counts[k]);
+    const colors = labels.map(k =>
+      k === 'APPROVE' ? '#34d399' :
+      k.includes('REVIEW') ? '#fbbf24' : '#f87171'
+    );
+
+    const ctx = document.getElementById('decision-chart').getContext('2d');
+    if (decisionChartInst) decisionChartInst.destroy();
+    decisionChartInst = new Chart(ctx, {
+      type: 'doughnut',
+      data: { labels, datasets: [{ data, backgroundColor: colors, borderWidth: 0 }] },
+      options: {
+        responsive: false,
+        cutout: '65%',
+        plugins: { legend: { display: false } },
+        animation: { duration: 400 },
+      }
+    });
+
+    // Legend
+    document.getElementById('decision-legend').innerHTML = labels.map((l, i) =>
+      `<div class="flex items-center gap-2">
+        <div class="w-2.5 h-2.5 rounded-full" style="background:${colors[i]}"></div>
+        <span class="text-slate-300 font-mono">${l}</span>
+        <span class="text-slate-500">${data[i]}</span>
+      </div>`
+    ).join('');
+  }
+
+  /* ── drift ── */
+  if (drift.status === 'fulfilled') {
+    const d = drift.value;
+    document.getElementById('mon-psi').textContent =
+      d.score_psi != null ? d.score_psi.toFixed(4) : '—';
+    document.getElementById('mon-drift-feats').textContent =
+      d.features_big_shift != null ? d.features_big_shift : '—';
+
+    const feats = d.top_drifted_features || [];
+    document.getElementById('drift-features').innerHTML = feats.length === 0
+      ? '<span class="text-slate-500">No drift data yet — needs 200+ scored transactions.</span>'
+      : feats.map(f => {
+          const pct = Math.min(100, Math.round(f.psi * 400));  // scale 0.25=100%
+          const color = f.level === 'BIG SHIFT' ? '#f87171' : f.level === 'small shift' ? '#fbbf24' : '#34d399';
+          return `<div class="mb-2">
+            <div class="flex justify-between text-xs mb-1">
+              <span class="font-mono text-slate-300">${f.feature}</span>
+              <span style="color:${color}">${f.psi.toFixed(3)} · ${f.level}</span>
+            </div>
+            <div class="bg-slate-700 rounded h-1.5">
+              <div class="shap-bar" style="width:${pct}%;background:${color}"></div>
+            </div>
+          </div>`;
+        }).join('');
+
+    // Score distribution (use the drift window rows as stand-in if available)
+    // We use a placeholder bar chart showing PSI severity
+    if (d.score_psi != null) {
+      const ctx2 = document.getElementById('score-dist-chart').getContext('2d');
+      if (scoreDistChartInst) scoreDistChartInst.destroy();
+      const psiVal = d.score_psi;
+      const driftColor = psiVal > 0.25 ? '#f87171' : psiVal > 0.1 ? '#fbbf24' : '#34d399';
+      scoreDistChartInst = new Chart(ctx2, {
+        type: 'bar',
+        data: {
+          labels: ['Score PSI vs training'],
+          datasets: [{
+            label: 'PSI',
+            data: [psiVal],
+            backgroundColor: [driftColor],
+            borderRadius: 6,
+          }, {
+            label: 'Warning threshold (0.10)',
+            data: [0.10],
+            backgroundColor: 'rgba(251,191,36,0.15)',
+            borderColor: '#fbbf24',
+            borderWidth: 1,
+            borderRadius: 6,
+            type: 'bar',
+          }, {
+            label: 'Alert threshold (0.25)',
+            data: [0.25],
+            backgroundColor: 'rgba(248,113,113,0.15)',
+            borderColor: '#f87171',
+            borderWidth: 1,
+            borderRadius: 6,
+            type: 'bar',
+          }]
+        },
+        options: {
+          responsive: true,
+          plugins: { legend: { labels: { color: '#94a3b8', boxWidth: 12 } } },
+          scales: {
+            x: { ticks: { color: '#475569' }, grid: { color: '#1e293b' } },
+            y: {
+              min: 0, max: 0.4,
+              ticks: { color: '#475569' },
+              grid: { color: '#1e293b' },
+            }
+          }
+        }
+      });
+    }
+  }
+
+  /* ── performance ── */
+  if (perf.status === 'fulfilled') {
+    const p = perf.value.all_time || perf.value;
+    const prec = p.precision;
+    const rec  = p.recall;
+    document.getElementById('mon-prec').textContent = prec != null ? (prec * 100).toFixed(1) + '%' : 'no data yet';
+    document.getElementById('mon-rec').textContent  = rec  != null ? (rec  * 100).toFixed(1) + '%' : 'no data yet';
+    document.getElementById('mon-prec-bar').style.width = prec != null ? (prec * 100) + '%' : '0%';
+    document.getElementById('mon-rec-bar').style.width  = rec  != null ? (rec  * 100) + '%' : '0%';
+    document.getElementById('mon-labeled').textContent  = p.labeled ?? '—';
+  }
+}
+
+/* ── Raw IEEE-CIS predict ──────────────────────── */
+/* Holdout fraud from train_transaction.csv (in the feature store). Kaggle test.csv IDs are not. */
+const RAW_IEEE_SAMPLE = {
+  "TransactionID": 3513782,
+  "note": "Paste a full IEEE row, or just a train_transaction TransactionID to replay stored features."
+};
+
+function loadRawIEEESample() {
+  document.getElementById('rawieee-json').value = JSON.stringify(RAW_IEEE_SAMPLE, null, 2);
+}
+
+async function runRawIEEE() {
+  const raw = document.getElementById('rawieee-json').value.trim();
+  const errEl = document.getElementById('rawieee-err');
+  errEl.textContent = '';
+  let txn;
+  try { txn = JSON.parse(raw); } catch { errEl.textContent = 'Invalid JSON.'; return; }
+
+  busy('rawieee-btn', true);
+  try {
+    const r = await apiFetch('/predict/raw', { method: 'POST', body: JSON.stringify(txn) });
+    document.getElementById('rawieee-result').classList.remove('hidden');
+    document.getElementById('rawieee-prob').textContent = formatFraudPct(r.fraud_prob) + ' fraud risk';
+    const detailEl = document.getElementById('rawieee-prob-detail');
+    if (detailEl) detailEl.textContent = thresholdHint(r);
+    const savedEl = document.getElementById('rawieee-saved');
+    if (savedEl) {
+      savedEl.textContent = r.txn_id != null
+        ? `Saved as #${r.txn_id} — Score Transaction and Investigate can use this ID now.`
+        : '';
+    }
+
+    const badge = document.getElementById('rawieee-badge');
+    badge.className = 'ml-auto px-4 py-2 rounded-full text-base font-semibold ' + decisionClass(r.decision);
+    badge.textContent = decisionLabel(r.decision);
+
+    const covEl = document.getElementById('rawieee-coverage');
+    if (r.coverage_pct != null) {
+      const filled = r.total_features != null ? (r.total_features - (r.nan_features ?? 0)) : '?';
+      const total  = r.total_features ?? '?';
+      covEl.textContent = `Coverage: ${r.coverage_pct}%  (${filled} / ${total} features non-NaN)`;
+    } else {
+      covEl.textContent = '';
+    }
+
+    const warnEl  = document.getElementById('rawieee-warn');
+    const warnTxt = document.getElementById('rawieee-warn-text');
+    if (r.reliable === false && r.note) {
+      warnEl.classList.remove('hidden');
+      warnTxt.textContent = '⚠ Single-transaction estimate. ' + r.note;
+    } else if (r.score_quality === 'degraded' && r.velocity_features_nan > 0) {
+      warnEl.classList.remove('hidden');
+      warnTxt.textContent =
+        `${r.velocity_features_nan} velocity/history features are NaN — ` +
+        `fraud recall ~${(100 - (r.recall_degradation_pct ?? 29.8)).toFixed(0)}% ` +
+        `vs ~63.7% with full features. `;
+    } else {
+      warnEl.classList.add('hidden');
+      warnTxt.textContent = '';
+    }
+
+    const shapWrap = document.getElementById('rawieee-shap');
+    if (r.factors && r.factors.length > 0) {
+      shapWrap.classList.remove('hidden');
+      renderShap(r.factors, 'rawieee-shap-bars');
+    } else {
+      shapWrap.classList.add('hidden');
+    }
+  } catch (e) {
+    errEl.textContent = e.message;
+    document.getElementById('rawieee-result').classList.add('hidden');
+  } finally {
+    busy('rawieee-btn', false);
+  }
+}
+
+/* ── Boot ──────────────────────────────────────── */
+checkHealth();
+setInterval(checkHealth, 30000);
+// Auto-refresh monitor if on that tab
+setInterval(() => {
+  if (document.getElementById('tab-monitor').classList.contains('active')) loadMonitor();
+}, 15000);
+</script>
+</body>
+</html>

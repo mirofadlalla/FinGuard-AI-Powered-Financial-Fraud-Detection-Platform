@@ -13,9 +13,16 @@ def best_f1_threshold(y, p):
 
 
 def cost_threshold(y, p, amount, fp_cost=FP_COST):
-    """Threshold with the lowest money loss: missed fraud = lost amount, false alarm = fp_cost."""
+    """Threshold with the lowest money loss: missed fraud = lost amount, false alarm = fp_cost.
+
+    Searches a grid of 400 candidate thresholds evenly spaced in [0.01, 0.99]
+    (probability space, not quantile space).  Using quantiles of p would start
+    the search at the 50th-percentile score, which for a well-calibrated model
+    on a ~3.5% fraud dataset is a tiny number (~0.00004), producing an absurdly
+    low review threshold that flags ~16% of all transactions.
+    """
     best_t, best_c = 0.5, np.inf
-    for t in np.unique(np.quantile(p, np.linspace(0.5, 0.9999, 400))):
+    for t in np.linspace(0.01, 0.99, 400):
         flagged = p >= t
         cost = amount[(y == 1) & ~flagged].sum() + fp_cost * ((y == 0) & flagged).sum()
         if cost < best_c:
